@@ -1,0 +1,8 @@
+# qmake build state and generated files
+.qmake.stash
+Makefile
+*.o
+qrc_resources.cpp
+
+# Built application (Linux)
+/open-woday
