@@ -1,15 +1,16 @@
-// The single high-level persistence seam of Phase 2 (issues 02 and 03): Items
-// are written through the store layer, the Database connection is closed and
-// reopened against the same local SQLite file, and the Items are read back
-// through the same public API — with every column, kind, query shape, update,
-// soft-delete and constraint error intact.
+// The single high-level persistence seam of Phase 2 (issues 02, 03 and 04):
+// Items and Blocks are written through the store layer, the Database connection
+// is closed and reopened against the same local SQLite file, and everything is
+// read back through the same public API — with every column, kind, query shape,
+// update, soft-delete, Block order and constraint error intact.
 //
 // This is an executable specification, not a test framework: no QtTest, no
 // catch/gtest, no CI configuration, no mocks, no assertions about SQL strings
-// or private helpers. It observes only externally visible Item values.
-// Folders and Tags have no repository in this phase, so their few fixture
-// rows are seeded with bound values; every assertion still reads through
-// ItemRepository.
+// or private helpers. It observes only externally visible Item and Block
+// values through the repositories. Folders and Tags have no repository in this
+// phase, so their few fixture rows are seeded with bound values; the one raw
+// DELETE that triggers the Block cascade is fixture setup too. No assertion
+// reads persisted state through a side channel.
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -24,6 +25,7 @@
 #include <optional>
 
 #include "store/Database.h"
+#include "store/BlockRepository.h"
 #include "store/ItemRepository.h"
 
 namespace {
@@ -936,6 +938,1049 @@ int constraintViolationsAreRejectedClearly()
     return 0;
 }
 
+// Issue 04, slice 1: one Block written before a restart reads back with every
+// field unchanged — position, type, content, inline_json, task_id and indent.
+// The expected values are independent literals, never recomputed by the store.
+// task_id points at a real Task Item, so foreign-key enforcement is exercised
+// through the public repository API as well.
+int aBlockSurvivesRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0) {
+        return 1;
+    }
+
+    const QString noteTitle = QStringLiteral("Tuesday");
+    const QString taskTitle = QStringLiteral("Reply to Anna");
+    const QString blockType = QStringLiteral("text");
+    const QString content = QStringLiteral("First line of the Note");
+    const std::optional<QString> inlineJson = QStringLiteral(
+        "[{\"start\":0,\"end\":5,\"type\":\"bold\"},"
+        "{\"start\":6,\"end\":21,\"type\":\"link\","
+        "\"href\":\"https://example.invalid\"}]");
+    const int indent = 2;
+
+    qlonglong noteId = 0;
+    qlonglong taskId = 0;
+    Block written;
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be opened on first launch: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        Item note;
+        note.kind = QStringLiteral("note");
+        note.title = noteTitle;
+        const std::optional<Item> createdNote = items.create(note);
+        if (!createdNote) {
+            return fail(QStringLiteral("the Note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteId = createdNote->id;
+
+        Item task;
+        task.kind = QStringLiteral("task");
+        task.title = taskTitle;
+        const std::optional<Item> createdTask = items.create(task);
+        if (!createdTask) {
+            return fail(QStringLiteral("the Task could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        taskId = createdTask->id;
+
+        BlockRepository blocks(database);
+        Block block;
+        block.itemId = noteId;
+        block.type = blockType;
+        block.content = content;
+        block.inlineJson = inlineJson;
+        block.taskId = taskId;
+        block.indent = indent;
+        const std::optional<Block> created = blocks.create(block);
+        if (!created) {
+            return fail(QStringLiteral("the Block could not be created: %1")
+                            .arg(blocks.lastError()));
+        }
+        written = *created;
+    }
+
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be reopened after the "
+                            "restart: %1")
+                            .arg(database.lastError()));
+        }
+        BlockRepository blocks(database);
+        const QList<Block> read = blocks.readByItem(noteId);
+        if (!check(read.size() == 1,
+                   QStringLiteral(
+                       "reading the Note's Blocks did not return one Block"))) {
+            return 1;
+        }
+        const Block& block = read.first();
+        if (!check(block.id == written.id,
+                   QStringLiteral("the Block id changed across the restart"))) {
+            return 1;
+        }
+        if (!check(block.itemId == noteId,
+                   QStringLiteral("the owning Item id did not round-trip"))) {
+            return 1;
+        }
+        if (!check(block.position == 0,
+                   QStringLiteral("the first Block is not at position 0"))) {
+            return 1;
+        }
+        if (!check(block.type == blockType,
+                   QStringLiteral("type did not round-trip unchanged"))) {
+            return 1;
+        }
+        if (!check(block.content == content,
+                   QStringLiteral("content did not round-trip unchanged"))) {
+            return 1;
+        }
+        if (!check(block.inlineJson == inlineJson,
+                   QStringLiteral("inline_json did not round-trip unchanged"))) {
+            return 1;
+        }
+        if (!check(block.taskId == std::optional<qlonglong>(taskId),
+                   QStringLiteral("task_id did not round-trip unchanged"))) {
+            return 1;
+        }
+        if (!check(block.indent == indent,
+                   QStringLiteral("indent did not round-trip unchanged"))) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+// Issue 04, slice 2: Blocks of all five types read back in the same order
+// within their owning Item after a restart, with inline_json, task_id and
+// indent intact. A second Note's Blocks stay separate; a Block is readable by
+// id; and CHECK / foreign-key violations are rejected with clear errors,
+// leaving no stray rows. A to-do Block is a Block type, not a synonym for a
+// Task: the Task it points at is a separate Item.
+int blocksOfAllTypesSurviveRestart()
+{
+    struct BlockSpec {
+        QString type;
+        QString content;
+        std::optional<QString> inlineJson;
+        std::optional<qlonglong> taskId;
+        int indent = 0;
+    };
+
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0) {
+        return 1;
+    }
+
+    const std::optional<QString> inlineJson = QStringLiteral(
+        "[{\"start\":0,\"end\":3,\"type\":\"italic\"}]");
+    const QString otherContent = QStringLiteral("A line in another Note");
+    QList<BlockSpec> specs = {
+        { QStringLiteral("text"),    QStringLiteral("Plain line"),
+          std::nullopt, std::nullopt, 0 },
+        { QStringLiteral("heading"), QStringLiteral("A heading"),
+          std::nullopt, std::nullopt, 0 },
+        { QStringLiteral("todo"),    QStringLiteral("A to-do line"),
+          inlineJson, std::nullopt, 1 },
+        { QStringLiteral("bullet"),  QStringLiteral("A bullet"),
+          std::nullopt, std::nullopt, 2 },
+        { QStringLiteral("code"),    QStringLiteral("int main() { return 0; }"),
+          std::nullopt, std::nullopt, 0 },
+    };
+
+    qlonglong noteAId = 0;
+    qlonglong noteBId = 0;
+    qlonglong otherId = 0;
+    QList<qlonglong> ids;
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be opened on first launch: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        Item noteA;
+        noteA.kind = QStringLiteral("note");
+        noteA.title = QStringLiteral("Tuesday");
+        const std::optional<Item> createdA = items.create(noteA);
+        if (!createdA) {
+            return fail(QStringLiteral("the first Note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteAId = createdA->id;
+
+        Item noteB;
+        noteB.kind = QStringLiteral("note");
+        noteB.title = QStringLiteral("Wednesday");
+        const std::optional<Item> createdB = items.create(noteB);
+        if (!createdB) {
+            return fail(QStringLiteral("the second Note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteBId = createdB->id;
+
+        Item task;
+        task.kind = QStringLiteral("task");
+        task.title = QStringLiteral("Reply to Anna");
+        const std::optional<Item> createdTask = items.create(task);
+        if (!createdTask) {
+            return fail(QStringLiteral("the Task could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        specs[2].taskId = createdTask->id;
+
+        BlockRepository blocks(database);
+        for (const BlockSpec& spec : specs) {
+            Block block;
+            block.itemId = noteAId;
+            block.type = spec.type;
+            block.content = spec.content;
+            block.inlineJson = spec.inlineJson;
+            block.taskId = spec.taskId;
+            block.indent = spec.indent;
+            const std::optional<Block> created = blocks.create(block);
+            if (!created) {
+                return fail(QStringLiteral(
+                                "a Block of type '%1' could not be created: %2")
+                                .arg(spec.type, blocks.lastError()));
+            }
+            ids.append(created->id);
+        }
+
+        Block other;
+        other.itemId = noteBId;
+        other.type = QStringLiteral("text");
+        other.content = otherContent;
+        const std::optional<Block> createdOther = blocks.create(other);
+        if (!createdOther) {
+            return fail(QStringLiteral(
+                            "the other Note's Block could not be created: %1")
+                            .arg(blocks.lastError()));
+        }
+        otherId = createdOther->id;
+
+        // The five-type CHECK constraint rejects an unknown Block type.
+        Block invalidType;
+        invalidType.itemId = noteAId;
+        invalidType.type = QStringLiteral("quote");
+        if (!check(!blocks.create(invalidType),
+                   QStringLiteral("an invalid Block type was accepted"))) {
+            return 1;
+        }
+        if (!check(blocks.lastError().contains(QStringLiteral("CHECK")),
+                   QStringLiteral(
+                       "an invalid Block type did not produce a clear error: %1")
+                       .arg(blocks.lastError()))) {
+            return 1;
+        }
+
+        // Foreign-key enforcement stays on: a Block needs a real owning Item.
+        Block unknownItem;
+        unknownItem.itemId = 999999;
+        unknownItem.type = QStringLiteral("text");
+        if (!check(!blocks.create(unknownItem),
+                   QStringLiteral(
+                       "a Block with an unknown owning Item was accepted"))) {
+            return 1;
+        }
+        if (!check(blocks.lastError().contains(QStringLiteral("FOREIGN KEY")),
+                   QStringLiteral(
+                       "a foreign-key violation did not produce a clear error"))) {
+            return 1;
+        }
+    }
+
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be reopened after the "
+                            "restart: %1")
+                            .arg(database.lastError()));
+        }
+        BlockRepository blocks(database);
+
+        // Exactly the five written Blocks remain: rejected writes left no rows.
+        const QList<Block> read = blocks.readByItem(noteAId);
+        if (!check(read.size() == specs.size(),
+                   QStringLiteral(
+                       "the Note's Blocks did not all survive the restart"))) {
+            return 1;
+        }
+        for (int i = 0; i < specs.size(); ++i) {
+            const Block& block = read.at(i);
+            const BlockSpec& spec = specs.at(i);
+            if (!check(block.id == ids.at(i) && block.itemId == noteAId
+                           && block.position == i,
+                       QStringLiteral(
+                           "a Block's id, owning Item or position changed"))) {
+                return 1;
+            }
+            if (!check(block.type == spec.type && block.content == spec.content,
+                       QStringLiteral(
+                           "a Block's type or content did not round-trip"))) {
+                return 1;
+            }
+            if (!check(block.inlineJson == spec.inlineJson
+                           && block.taskId == spec.taskId
+                           && block.indent == spec.indent,
+                       QStringLiteral(
+                           "inline_json, task_id or indent changed"))) {
+                return 1;
+            }
+        }
+
+        const std::optional<Block> byId = blocks.readById(ids.at(2));
+        if (!check(byId && byId->id == ids.at(2)
+                       && byId->type == QStringLiteral("todo")
+                       && byId->taskId == specs.at(2).taskId,
+                   QStringLiteral("a Block could not be read back by id"))) {
+            return 1;
+        }
+        if (!check(!blocks.readById(999999),
+                   QStringLiteral("an absent Block id returned a Block"))) {
+            return 1;
+        }
+
+        const QList<Block> other = blocks.readByItem(noteBId);
+        if (!check(other.size() == 1 && other.first().id == otherId
+                       && other.first().content == otherContent
+                       && other.first().position == 0,
+                   QStringLiteral(
+                       "another Note's Blocks were mixed into this Note"))) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+// Issue 04, slice 3: an updated Block reads back with every changed column
+// intact after a restart, while the surrounding Blocks keep their order and
+// their own values. Updating an absent Block reports a clear error.
+int blockUpdatesSurviveRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0) {
+        return 1;
+    }
+
+    const QString firstContent = QStringLiteral("First line");
+    const QString secondContent = QStringLiteral("Second line");
+    const QString thirdContent = QStringLiteral("Third line");
+    const QString updatedContent = QStringLiteral("Revised second line");
+    const std::optional<QString> updatedInlineJson = QStringLiteral(
+        "[{\"start\":0,\"end\":7,\"type\":\"bold\"}]");
+    const int updatedIndent = 3;
+
+    qlonglong noteId = 0;
+    qlonglong taskId = 0;
+    QList<qlonglong> ids;
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be opened on first launch: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        Item note;
+        note.kind = QStringLiteral("note");
+        note.title = QStringLiteral("Tuesday");
+        const std::optional<Item> createdNote = items.create(note);
+        if (!createdNote) {
+            return fail(QStringLiteral("the Note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteId = createdNote->id;
+
+        Item task;
+        task.kind = QStringLiteral("task");
+        task.title = QStringLiteral("Reply to Anna");
+        const std::optional<Item> createdTask = items.create(task);
+        if (!createdTask) {
+            return fail(QStringLiteral("the Task could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        taskId = createdTask->id;
+
+        BlockRepository blocks(database);
+        const QStringList types = { QStringLiteral("text"),
+                                    QStringLiteral("heading"),
+                                    QStringLiteral("bullet") };
+        const QStringList contents = { firstContent, secondContent,
+                                       thirdContent };
+        for (int i = 0; i < types.size(); ++i) {
+            Block block;
+            block.itemId = noteId;
+            block.type = types.at(i);
+            block.content = contents.at(i);
+            const std::optional<Block> created = blocks.create(block);
+            if (!created) {
+                return fail(QStringLiteral("a Block could not be created: %1")
+                                .arg(blocks.lastError()));
+            }
+            ids.append(created->id);
+        }
+
+        const QList<Block> current = blocks.readByItem(noteId);
+        if (!check(current.size() == 3,
+                   QStringLiteral(
+                       "the Note's three Blocks could not be read before update"))) {
+            return 1;
+        }
+        Block revised = current.at(1);
+        revised.type = QStringLiteral("code");
+        revised.content = updatedContent;
+        revised.inlineJson = updatedInlineJson;
+        revised.taskId = taskId;
+        revised.indent = updatedIndent;
+        if (!blocks.update(revised)) {
+            return fail(QStringLiteral("the Block could not be updated: %1")
+                            .arg(blocks.lastError()));
+        }
+
+        Block absent = revised;
+        absent.id = 999999;
+        if (!check(!blocks.update(absent),
+                   QStringLiteral("updating an absent Block succeeded"))) {
+            return 1;
+        }
+        if (!check(blocks.lastError().contains(QStringLiteral("no Block")),
+                   QStringLiteral(
+                       "updating an absent Block did not report a clear error: %1")
+                       .arg(blocks.lastError()))) {
+            return 1;
+        }
+    }
+
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be reopened after the "
+                            "restart: %1")
+                            .arg(database.lastError()));
+        }
+        BlockRepository blocks(database);
+
+        const QList<Block> read = blocks.readByItem(noteId);
+        if (!check(read.size() == 3,
+                   QStringLiteral(
+                       "the Note's Blocks did not all survive the restart"))) {
+            return 1;
+        }
+        for (int i = 0; i < read.size(); ++i) {
+            if (!check(read.at(i).id == ids.at(i)
+                           && read.at(i).position == i
+                           && read.at(i).itemId == noteId,
+                       QStringLiteral(
+                           "the Block order or owning Item changed on update"))) {
+                return 1;
+            }
+        }
+        if (!check(read.at(0).type == QStringLiteral("text")
+                       && read.at(0).content == firstContent
+                       && read.at(0).inlineJson == std::nullopt
+                       && read.at(0).taskId == std::nullopt
+                       && read.at(0).indent == 0,
+                   QStringLiteral("the first Block changed on update"))) {
+            return 1;
+        }
+        if (!check(read.at(2).type == QStringLiteral("bullet")
+                       && read.at(2).content == thirdContent
+                       && read.at(2).indent == 0,
+                   QStringLiteral("the third Block changed on update"))) {
+            return 1;
+        }
+        const Block& changed = read.at(1);
+        if (!check(changed.type == QStringLiteral("code")
+                       && changed.content == updatedContent
+                       && changed.inlineJson == updatedInlineJson
+                       && changed.taskId == std::optional<qlonglong>(taskId)
+                       && changed.indent == updatedIndent,
+                   QStringLiteral(
+                       "the updated Block's columns did not survive the restart"))) {
+            return 1;
+        }
+
+        const std::optional<Block> byId = blocks.readById(ids.at(1));
+        if (!check(byId && byId->type == changed.type
+                       && byId->content == changed.content,
+                   QStringLiteral(
+                       "reading the updated Block by id disagreed"))) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+// Issue 04, slice 4: deleting a Block re-sequences the positions of the
+// Blocks that remain, and the resulting order survives a restart. Deleting an
+// absent Block reports a clear error and leaves the other Blocks untouched.
+int blockDeletionResequencesAndSurvivesRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0) {
+        return 1;
+    }
+
+    const QStringList contents = { QStringLiteral("Line A"),
+                                   QStringLiteral("Line B"),
+                                   QStringLiteral("Line C"),
+                                   QStringLiteral("Line D") };
+
+    qlonglong noteId = 0;
+    QList<qlonglong> ids;
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be opened on first launch: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        Item note;
+        note.kind = QStringLiteral("note");
+        note.title = QStringLiteral("Tuesday");
+        const std::optional<Item> createdNote = items.create(note);
+        if (!createdNote) {
+            return fail(QStringLiteral("the Note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteId = createdNote->id;
+
+        BlockRepository blocks(database);
+        for (const QString& content : contents) {
+            Block block;
+            block.itemId = noteId;
+            block.type = QStringLiteral("text");
+            block.content = content;
+            const std::optional<Block> created = blocks.create(block);
+            if (!created) {
+                return fail(QStringLiteral("a Block could not be created: %1")
+                                .arg(blocks.lastError()));
+            }
+            ids.append(created->id);
+        }
+
+        if (!blocks.remove(ids.at(1))) {
+            return fail(QStringLiteral("the second Block could not be deleted: %1")
+                            .arg(blocks.lastError()));
+        }
+        if (!blocks.remove(ids.at(0))) {
+            return fail(QStringLiteral("the first Block could not be deleted: %1")
+                            .arg(blocks.lastError()));
+        }
+        if (!check(!blocks.remove(999999),
+                   QStringLiteral("deleting an absent Block succeeded"))) {
+            return 1;
+        }
+        if (!check(blocks.lastError().contains(QStringLiteral("no Block")),
+                   QStringLiteral(
+                       "deleting an absent Block did not report a clear error: %1")
+                       .arg(blocks.lastError()))) {
+            return 1;
+        }
+    }
+
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be reopened after the "
+                            "restart: %1")
+                            .arg(database.lastError()));
+        }
+        BlockRepository blocks(database);
+
+        const QList<Block> read = blocks.readByItem(noteId);
+        if (!check(read.size() == 2,
+                   QStringLiteral(
+                       "deleting two Blocks did not leave two Blocks"))) {
+            return 1;
+        }
+        if (!check(read.at(0).id == ids.at(2) && read.at(0).position == 0
+                       && read.at(0).content == contents.at(2),
+                   QStringLiteral(
+                       "the first remaining Block was not re-sequenced"))) {
+            return 1;
+        }
+        if (!check(read.at(1).id == ids.at(3) && read.at(1).position == 1
+                       && read.at(1).content == contents.at(3),
+                   QStringLiteral(
+                       "the second remaining Block was not re-sequenced"))) {
+            return 1;
+        }
+        if (!check(!blocks.readById(ids.at(0)) && !blocks.readById(ids.at(1)),
+                   QStringLiteral("a deleted Block was still readable by id"))) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+// Issue 04, slice 5 — the ticket's headline persistence seam: a Note's Blocks
+// written and reordered before a restart read back in the same order after the
+// connection is reopened. A reorder that names a foreign Block is rejected
+// clearly and leaves the stored order untouched.
+int blockReorderSurvivesRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0) {
+        return 1;
+    }
+
+    const QStringList contents = { QStringLiteral("Line A"),
+                                   QStringLiteral("Line B"),
+                                   QStringLiteral("Line C"),
+                                   QStringLiteral("Line D"),
+                                   QStringLiteral("Line E") };
+    const QStringList types = { QStringLiteral("text"),
+                                QStringLiteral("heading"),
+                                QStringLiteral("todo"),
+                                QStringLiteral("bullet"),
+                                QStringLiteral("code") };
+
+    qlonglong noteAId = 0;
+    qlonglong noteBId = 0;
+    qlonglong foreignId = 0;
+    QList<qlonglong> ids;
+    QList<qlonglong> perm;
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be opened on first launch: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        Item noteA;
+        noteA.kind = QStringLiteral("note");
+        noteA.title = QStringLiteral("Tuesday");
+        const std::optional<Item> createdA = items.create(noteA);
+        if (!createdA) {
+            return fail(QStringLiteral("the first Note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteAId = createdA->id;
+
+        Item noteB;
+        noteB.kind = QStringLiteral("note");
+        noteB.title = QStringLiteral("Wednesday");
+        const std::optional<Item> createdB = items.create(noteB);
+        if (!createdB) {
+            return fail(QStringLiteral("the second Note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteBId = createdB->id;
+
+        BlockRepository blocks(database);
+        for (int i = 0; i < contents.size(); ++i) {
+            Block block;
+            block.itemId = noteAId;
+            block.type = types.at(i);
+            block.content = contents.at(i);
+            const std::optional<Block> created = blocks.create(block);
+            if (!created) {
+                return fail(QStringLiteral("a Block could not be created: %1")
+                                .arg(blocks.lastError()));
+            }
+            ids.append(created->id);
+        }
+
+        Block foreign;
+        foreign.itemId = noteBId;
+        foreign.type = QStringLiteral("text");
+        foreign.content = QStringLiteral("A line in another Note");
+        const std::optional<Block> createdForeign = blocks.create(foreign);
+        if (!createdForeign) {
+            return fail(QStringLiteral(
+                            "the other Note's Block could not be created: %1")
+                            .arg(blocks.lastError()));
+        }
+        foreignId = createdForeign->id;
+
+        // A reorder may only name this Item's own Blocks.
+        const QList<qlonglong> withForeign = { ids.at(0), ids.at(1), foreignId,
+                                              ids.at(2), ids.at(3) };
+        if (!check(!blocks.reorder(noteAId, withForeign),
+                   QStringLiteral("a reorder naming a foreign Block succeeded"))) {
+            return 1;
+        }
+        if (!check(blocks.lastError().contains(QStringLiteral("reorder")),
+                   QStringLiteral(
+                       "a rejected reorder did not report a clear error: %1")
+                       .arg(blocks.lastError()))) {
+            return 1;
+        }
+        const QList<Block> afterRejection = blocks.readByItem(noteAId);
+        if (!check(afterRejection.size() == ids.size()
+                       && afterRejection.at(2).id == ids.at(2)
+                       && afterRejection.at(2).position == 2,
+                   QStringLiteral("a rejected reorder changed the stored order"))) {
+            return 1;
+        }
+
+        perm = { ids.at(3), ids.at(0), ids.at(4), ids.at(2), ids.at(1) };
+        if (!blocks.reorder(noteAId, perm)) {
+            return fail(QStringLiteral("the Blocks could not be reordered: %1")
+                            .arg(blocks.lastError()));
+        }
+    }
+
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be reopened after the "
+                            "restart: %1")
+                            .arg(database.lastError()));
+        }
+        BlockRepository blocks(database);
+
+        const QList<Block> read = blocks.readByItem(noteAId);
+        if (!check(read.size() == perm.size(),
+                   QStringLiteral(
+                       "the reordered Blocks did not all survive the restart"))) {
+            return 1;
+        }
+        for (int i = 0; i < perm.size(); ++i) {
+            if (!check(read.at(i).id == perm.at(i) && read.at(i).position == i,
+                       QStringLiteral(
+                           "the reordered Block order changed across the restart"))) {
+                return 1;
+            }
+        }
+        // Independent worked example: the new order is D, A, E, C, B.
+        const QStringList expected = { contents.at(3), contents.at(0),
+                                       contents.at(4), contents.at(2),
+                                       contents.at(1) };
+        for (int i = 0; i < expected.size(); ++i) {
+            if (!check(read.at(i).content == expected.at(i),
+                       QStringLiteral(
+                           "a reordered Block's content changed"))) {
+                return 1;
+            }
+        }
+
+        const std::optional<Block> byId = blocks.readById(ids.at(3));
+        if (!check(byId && byId->position == 0,
+                   QStringLiteral(
+                       "reading a reordered Block by id disagreed"))) {
+            return 1;
+        }
+        const QList<Block> other = blocks.readByItem(noteBId);
+        if (!check(other.size() == 1 && other.first().id == foreignId
+                       && other.first().position == 0,
+                   QStringLiteral(
+                       "the other Note's Block was disturbed by the reorder"))) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+// Issue 04, slice 6: inserting a Block at an explicit position re-sequences
+// the positions of the Blocks already in the owning Item, and that order
+// survives a restart. A position past the end clamps to an append.
+int blockInsertionResequencesAndSurvivesRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0) {
+        return 1;
+    }
+
+    const QString lineA = QStringLiteral("Line A");
+    const QString lineB = QStringLiteral("Line B");
+    const QString lineC = QStringLiteral("Line C");
+    const QString first = QStringLiteral("Inserted first");
+    const QString middle = QStringLiteral("Inserted middle");
+    const QString appended = QStringLiteral("Appended last");
+
+    qlonglong noteId = 0;
+    QList<qlonglong> expectedIds;
+    QStringList expectedContents;
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be opened on first launch: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        Item note;
+        note.kind = QStringLiteral("note");
+        note.title = QStringLiteral("Tuesday");
+        const std::optional<Item> createdNote = items.create(note);
+        if (!createdNote) {
+            return fail(QStringLiteral("the Note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteId = createdNote->id;
+
+        BlockRepository blocks(database);
+        QList<qlonglong> originalIds;
+        for (const QString& content : { lineA, lineB, lineC }) {
+            Block block;
+            block.itemId = noteId;
+            block.type = QStringLiteral("text");
+            block.content = content;
+            const std::optional<Block> created = blocks.create(block);
+            if (!created) {
+                return fail(QStringLiteral("a Block could not be created: %1")
+                                .arg(blocks.lastError()));
+            }
+            originalIds.append(created->id);
+        }
+
+        Block insertMiddle;
+        insertMiddle.itemId = noteId;
+        insertMiddle.type = QStringLiteral("text");
+        insertMiddle.content = middle;
+        insertMiddle.position = 1;
+        const std::optional<Block> createdMiddle = blocks.create(insertMiddle);
+        if (!createdMiddle) {
+            return fail(QStringLiteral(
+                            "the middle Block could not be inserted: %1")
+                            .arg(blocks.lastError()));
+        }
+        if (!check(createdMiddle->position == 1,
+                   QStringLiteral(
+                       "the middle Block was not inserted at position 1"))) {
+            return 1;
+        }
+
+        Block insertFirst;
+        insertFirst.itemId = noteId;
+        insertFirst.type = QStringLiteral("text");
+        insertFirst.content = first;
+        insertFirst.position = 0;
+        const std::optional<Block> createdFirst = blocks.create(insertFirst);
+        if (!createdFirst) {
+            return fail(QStringLiteral(
+                            "the first Block could not be inserted: %1")
+                            .arg(blocks.lastError()));
+        }
+
+        Block insertPastEnd;
+        insertPastEnd.itemId = noteId;
+        insertPastEnd.type = QStringLiteral("text");
+        insertPastEnd.content = appended;
+        insertPastEnd.position = 99;
+        const std::optional<Block> createdAppended =
+            blocks.create(insertPastEnd);
+        if (!createdAppended) {
+            return fail(QStringLiteral(
+                            "the trailing Block could not be inserted: %1")
+                            .arg(blocks.lastError()));
+        }
+        if (!check(createdAppended->position == 5,
+                   QStringLiteral(
+                       "a position past the end did not clamp to an append"))) {
+            return 1;
+        }
+
+        expectedIds = { createdFirst->id, originalIds.at(0),
+                        createdMiddle->id, originalIds.at(1),
+                        originalIds.at(2), createdAppended->id };
+        expectedContents = { first, lineA, middle, lineB, lineC, appended };
+    }
+
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be reopened after the "
+                            "restart: %1")
+                            .arg(database.lastError()));
+        }
+        BlockRepository blocks(database);
+
+        const QList<Block> read = blocks.readByItem(noteId);
+        if (!check(read.size() == expectedIds.size(),
+                   QStringLiteral(
+                       "inserting Blocks did not leave the expected count"))) {
+            return 1;
+        }
+        for (int i = 0; i < expectedIds.size(); ++i) {
+            if (!check(read.at(i).id == expectedIds.at(i)
+                           && read.at(i).position == i
+                           && read.at(i).content == expectedContents.at(i),
+                       QStringLiteral(
+                           "the re-sequenced Block order changed across the "
+                           "restart"))) {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+// Issue 04, slice 7: the schema's ON DELETE CASCADE removes an owning Item's
+// Blocks and leaves no orphan rows, observed through BlockRepository across a
+// restart. ItemRepository exposes only soft-delete (ticket 03), so the cascade
+// contract of the schema is triggered with a bound-value raw DELETE as fixture
+// setup; every assertion still reads through the BlockRepository interface.
+int deletingAnItemCascadesToItsBlocks()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0) {
+        return 1;
+    }
+
+    const QString otherContent = QStringLiteral("A line in another Note");
+
+    qlonglong noteAId = 0;
+    qlonglong noteBId = 0;
+    QList<qlonglong> cascadeIds;
+    qlonglong otherId = 0;
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be opened on first launch: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        Item noteA;
+        noteA.kind = QStringLiteral("note");
+        noteA.title = QStringLiteral("Tuesday");
+        const std::optional<Item> createdA = items.create(noteA);
+        if (!createdA) {
+            return fail(QStringLiteral("the first Note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteAId = createdA->id;
+
+        Item noteB;
+        noteB.kind = QStringLiteral("note");
+        noteB.title = QStringLiteral("Wednesday");
+        const std::optional<Item> createdB = items.create(noteB);
+        if (!createdB) {
+            return fail(QStringLiteral("the second Note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteBId = createdB->id;
+
+        Item task;
+        task.kind = QStringLiteral("task");
+        task.title = QStringLiteral("Reply to Anna");
+        const std::optional<Item> createdTask = items.create(task);
+        if (!createdTask) {
+            return fail(QStringLiteral("the Task could not be created: %1")
+                            .arg(items.lastError()));
+        }
+
+        BlockRepository blocks(database);
+        const QStringList types = { QStringLiteral("text"),
+                                    QStringLiteral("todo"),
+                                    QStringLiteral("code") };
+        for (int i = 0; i < types.size(); ++i) {
+            Block block;
+            block.itemId = noteAId;
+            block.type = types.at(i);
+            block.content = QStringLiteral("Line %1").arg(i);
+            if (types.at(i) == QStringLiteral("todo")) {
+                block.taskId = createdTask->id;
+            }
+            const std::optional<Block> created = blocks.create(block);
+            if (!created) {
+                return fail(QStringLiteral("a Block could not be created: %1")
+                                .arg(blocks.lastError()));
+            }
+            cascadeIds.append(created->id);
+        }
+
+        Block other;
+        other.itemId = noteBId;
+        other.type = QStringLiteral("text");
+        other.content = otherContent;
+        const std::optional<Block> createdOther = blocks.create(other);
+        if (!createdOther) {
+            return fail(QStringLiteral(
+                            "the other Note's Block could not be created: %1")
+                            .arg(blocks.lastError()));
+        }
+        otherId = createdOther->id;
+
+        // A hard DELETE is the only operation that fires ON DELETE CASCADE;
+        // the repository deliberately exposes no hard delete for Items.
+        const QList<Block> beforeDeletion = blocks.readByItem(noteAId);
+        if (!check(beforeDeletion.size() == cascadeIds.size(),
+                   QStringLiteral(
+                       "the owning Item's Blocks were not there to cascade"))) {
+            return 1;
+        }
+        QSqlQuery deletion(database.connection());
+        deletion.prepare(QStringLiteral("DELETE FROM items WHERE id = ?"));
+        deletion.addBindValue(noteAId);
+        if (!deletion.exec()) {
+            return fail(QStringLiteral("the owning Item could not be deleted: %1")
+                            .arg(deletion.lastError().text()));
+        }
+        if (!check(deletion.numRowsAffected() == 1,
+                   QStringLiteral("the owning Item was not deleted"))) {
+            return 1;
+        }
+    }
+
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be reopened after the "
+                            "restart: %1")
+                            .arg(database.lastError()));
+        }
+        BlockRepository blocks(database);
+
+        if (!check(blocks.readByItem(noteAId).isEmpty(),
+                   QStringLiteral(
+                       "the deleted Item's Blocks remained after the restart"))) {
+            return 1;
+        }
+        for (qlonglong id : cascadeIds) {
+            if (!check(!blocks.readById(id),
+                       QStringLiteral(
+                           "an orphan Block row remained after the restart"))) {
+                return 1;
+            }
+        }
+        const QList<Block> other = blocks.readByItem(noteBId);
+        if (!check(other.size() == 1 && other.first().id == otherId
+                       && other.first().content == otherContent
+                       && other.first().position == 0,
+                   QStringLiteral(
+                       "the cascade reached another Item's Blocks"))) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
@@ -1047,9 +2092,31 @@ int main(int argc, char* argv[])
     if (constraintViolationsAreRejectedClearly() != 0) {
         return 1;
     }
+    if (aBlockSurvivesRestart() != 0) {
+        return 1;
+    }
+    if (blocksOfAllTypesSurviveRestart() != 0) {
+        return 1;
+    }
+    if (blockUpdatesSurviveRestart() != 0) {
+        return 1;
+    }
+    if (blockDeletionResequencesAndSurvivesRestart() != 0) {
+        return 1;
+    }
+    if (blockReorderSurvivesRestart() != 0) {
+        return 1;
+    }
+    if (blockInsertionResequencesAndSurvivesRestart() != 0) {
+        return 1;
+    }
+    if (deletingAnItemCascadesToItsBlocks() != 0) {
+        return 1;
+    }
 
-    std::puts("verify-persistence: PASS - Items of every kind, with every "
-              "field, update, soft-delete, query shape and constraint error, "
-              "survive a restart unchanged");
+    std::puts("verify-persistence: PASS - Items of every kind and Blocks of "
+              "every type, with every field, update, soft-delete, query shape, "
+              "Block order, cascade and constraint error, survive a restart "
+              "unchanged");
     return 0;
 }

@@ -6,9 +6,11 @@ CONFIG += c++17
 
 SOURCES += src/main.cpp \
            src/store/Database.cpp \
-           src/store/ItemRepository.cpp
+           src/store/ItemRepository.cpp \
+           src/store/BlockRepository.cpp
 
 HEADERS += src/store/Database.h \
-           src/store/ItemRepository.h
+           src/store/ItemRepository.h \
+           src/store/BlockRepository.h
 
 RESOURCES += resources.qrc
