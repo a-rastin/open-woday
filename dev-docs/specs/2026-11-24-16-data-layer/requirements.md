@@ -132,7 +132,7 @@ non-demoable horizontal layer.
 9. As a contributor, I want one `Item` table with a `kind` discriminator for Task, Note and Event, so that the unified domain model (D17) is respected.
 10. As a contributor, I want the `items` columns to cover scheduling, priority, duration, parent, folder, day and sorting, so that Phase 4–9 features map to existing fields rather than a later schema rewrite.
 11. As a contributor, I want the `items` `kind` and `due_precision` values constrained by `CHECK`, so that invalid data cannot be persisted silently.
-12. As a contributor, I want a unique index enforcing one Day note per date, so that two Day notes for the same day cannot exist.
+12. As a contributor, I want a partial unique index enforcing one active Day note per date (soft-deleted rows excluded), so that two active Day notes for the same day cannot exist while a soft-deleted note's date can be reused.
 13. As a contributor, I want `blocks` to have a `position`, a five-type `CHECK`, `inline_json`, `task_id` and `indent`, so that the Phase 6 editor and Phase 7 to-do→Task links have the right storage shape.
 14. As a contributor, I want an index on Blocks by owning Item and position, so that loading a Note's Blocks in order stays cheap.
 15. As a contributor, I want `item_tags` to be a many-to-many table with a composite primary key, so that a Tag can cross Folders as the glossary requires.
@@ -185,8 +185,9 @@ Stated in durable terms; concrete file/command targets are in `plan.md` and
   exactly as specified in `tech-stack.md` §7.2: seven tables (`items`, `blocks`,
   `folders`, `tags`, `item_tags`, `links`, `meta`), their columns, `CHECK`
   constraints, foreign keys, cascade deletes, the composite primary keys, the
-  `blocks_by_item` index and the partial unique index that enforces one Day note
-  per date. C++ does not embed scattered DDL.
+  `blocks_by_item` index and the partial unique index that enforces one active
+  Day note per date (soft-deleted rows excluded, so their dates can be reused).
+  C++ does not embed scattered DDL.
 - **Unified domain model.** One `Item` table with a `kind` discriminator
   (`task`, `note`, `event`) carries scheduling, priority, duration, parent,
   folder, day and sort-order fields. There is no separate Task, Note, DayNote,

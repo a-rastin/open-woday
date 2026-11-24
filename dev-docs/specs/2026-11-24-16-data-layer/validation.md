@@ -93,8 +93,10 @@ no CMake.
    `blocks.type` and `links.kind`; foreign keys with the specified cascade
    deletes; composite primary keys on `item_tags` and `links`;
    `blocks_by_item` index; and the partial unique index
-   `one_day_note_per_day`. Inserting a second Day note for the same `day` is
-   rejected with a clear error.
+   `one_day_note_per_day` (covering active rows only, `deleted_at IS NULL`).
+   Inserting a second active Day note for the same `day` is rejected with a
+   clear error, while the date of a soft-deleted Day note can be reused by a
+   replacement.
 6. **Migrations.** Migrations are versioned and applied in order; on a second
    launch, already-applied versions are skipped, the schema is not destructively
    rebuilt, and the recorded version is unchanged.

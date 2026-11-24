@@ -942,6 +942,147 @@ int constraintViolationsAreRejectedClearly()
     return 0;
 }
 
+// Regression: a soft-deleted Day note no longer reserves its date. The
+// one_day_note_per_day unique index covers only active rows (deleted_at IS NULL),
+// matching normal reads, so deleting a Day note and creating a replacement for
+// the same date is allowed and survives a restart. The rule still rejects a
+// second *active* Day note for the same date, with a clear error.
+int deletedDayNoteDateCanBeReused()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0) {
+        return 1;
+    }
+
+    const std::optional<QString> day = QStringLiteral("2026-11-24");
+    const QString replacementTitle = QStringLiteral("Tuesday, replacement");
+    qlonglong firstId = 0;
+    qlonglong replacementId = 0;
+
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be opened on first launch: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        Item first;
+        first.kind = QStringLiteral("note");
+        first.title = QStringLiteral("Tuesday");
+        first.day = day;
+        const std::optional<Item> createdFirst = items.create(first);
+        if (!createdFirst) {
+            return fail(QStringLiteral(
+                            "the first Day note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        firstId = createdFirst->id;
+
+        // A second active Day note for the same date is still rejected.
+        Item activeDuplicate;
+        activeDuplicate.kind = QStringLiteral("note");
+        activeDuplicate.title = QStringLiteral("Another Tuesday");
+        activeDuplicate.day = day;
+        if (!check(!items.create(activeDuplicate),
+                   QStringLiteral(
+                       "a second active Day note for the same date was accepted"))) {
+            return 1;
+        }
+        if (!check(items.lastError().contains(QStringLiteral("Day note")),
+                   QStringLiteral(
+                       "a duplicate active Day note did not produce a clear error"))) {
+            return 1;
+        }
+
+        if (!items.softDelete(firstId)) {
+            return fail(QStringLiteral(
+                            "the Day note could not be soft-deleted: %1")
+                            .arg(items.lastError()));
+        }
+
+        // The soft-deleted Day note's date is now reusable.
+        Item replacement;
+        replacement.kind = QStringLiteral("note");
+        replacement.title = replacementTitle;
+        replacement.day = day;
+        const std::optional<Item> createdReplacement = items.create(replacement);
+        if (!createdReplacement) {
+            return fail(QStringLiteral(
+                            "a replacement Day note for the soft-deleted date "
+                            "could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        replacementId = createdReplacement->id;
+    }
+
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be reopened after the "
+                            "restart: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        const QList<Item> byDay = items.readByDay(*day);
+        if (!check(byDay.size() == 1
+                       && byDay.first().id == replacementId
+                       && byDay.first().title == replacementTitle,
+                   QStringLiteral(
+                       "reading by day did not return only the replacement "
+                       "Day note after the restart"))) {
+            return 1;
+        }
+
+        const std::optional<Item> replacement = items.readById(replacementId);
+        if (!check(replacement && replacement->day == day
+                       && replacement->deletedAt == std::nullopt,
+                   QStringLiteral(
+                       "the replacement Day note did not survive the restart"))) {
+            return 1;
+        }
+
+        // The soft-deleted row stays in the file, hidden from normal reads, and
+        // keeps its date: the fix is the index predicate, not data loss.
+        if (!check(!items.readById(firstId),
+                   QStringLiteral(
+                       "the soft-deleted Day note was returned by a normal read"))) {
+            return 1;
+        }
+        const std::optional<Item> stored =
+            items.readByIdIncludingSoftDeleted(firstId);
+        if (!check(stored && stored->deletedAt.has_value()
+                       && stored->day == day,
+                   QStringLiteral(
+                       "the soft-deleted Day note lost its date or marker"))) {
+            return 1;
+        }
+
+        // The one-active-note-per-date rule still holds after the restart.
+        Item third;
+        third.kind = QStringLiteral("note");
+        third.title = QStringLiteral("A third Tuesday");
+        third.day = day;
+        if (!check(!items.create(third),
+                   QStringLiteral(
+                       "a second active Day note for the date was accepted "
+                       "after the restart"))) {
+            return 1;
+        }
+        if (!check(items.lastError().contains(QStringLiteral("Day note")),
+                   QStringLiteral(
+                       "a duplicate active Day note did not produce a clear "
+                       "error after the restart"))) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 // Issue 04, slice 1: one Block written before a restart reads back with every
 // field unchanged — position, type, content, inline_json, task_id and indent.
 // The expected values are independent literals, never recomputed by the store.
@@ -2435,6 +2576,9 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (constraintViolationsAreRejectedClearly() != 0) {
+        return 1;
+    }
+    if (deletedDayNoteDateCanBeReused() != 0) {
         return 1;
     }
     if (aBlockSurvivesRestart() != 0) {

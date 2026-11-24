@@ -59,7 +59,8 @@
    deletes), `links` (composite primary key plus its `kind` `CHECK`), and `meta`
    (`key` primary key, `value NOT NULL`).
 5. Add `CREATE UNIQUE INDEX one_day_note_per_day ON items(day) WHERE day IS NOT
-   NULL` so a Day note is unique per date (`tech-stack.md` §6.3 / §7.2).
+   NULL AND deleted_at IS NULL` so an active Day note is unique per date and a
+   soft-deleted note's date stays reusable (`tech-stack.md` §6.3 / §7.2).
 6. Verify the schema is created **on first launch only** and is not re-applied
    destructively on later launches.
 

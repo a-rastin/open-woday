@@ -300,6 +300,12 @@ bool ItemRepository::softDelete(qlonglong id)
 {
     m_error.clear();
 
+    // Setting deleted_at is the only change needed to retire an Item. Every
+    // normal read filters on deleted_at IS NULL, and the one_day_note_per_day
+    // partial index uses the same predicate, so this UPDATE also drops a Day
+    // note out of that index. The row keeps its day (visible through
+    // readByIdIncludingSoftDeleted) but no longer reserves the date, leaving it
+    // free for a replacement Day note.
     QSqlQuery query(m_database.connection());
     query.prepare(QStringLiteral(
         "UPDATE items SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL"));

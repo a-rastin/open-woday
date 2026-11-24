@@ -26,7 +26,10 @@ CREATE TABLE items (
   day            TEXT,
   sort_order     INTEGER NOT NULL DEFAULT 0
 );
-CREATE UNIQUE INDEX one_day_note_per_day ON items(day) WHERE day IS NOT NULL;
+-- Only active Day notes take part in the one-note-per-date rule. A soft-deleted
+-- Day note keeps its day but no longer blocks reusing that date, because normal
+-- reads and this index both ignore rows whose deleted_at is set.
+CREATE UNIQUE INDEX one_day_note_per_day ON items(day) WHERE day IS NOT NULL AND deleted_at IS NULL;
 
 CREATE TABLE blocks (
   id           INTEGER PRIMARY KEY,
