@@ -5,12 +5,13 @@ cannot run the macOS-only upstream app. Linux first, then Windows and macOS —
 from one Qt Quick / QML + C++ codebase, with no account, no cloud and no
 webview.
 
-> **Status: design complete, implementation not started.** Every decision for
-> `v0.1` is settled in the [constitution](#project-documentation), but there is
-> no application code, no binary and no release yet. The install and build
-> steps below describe the **planned** `v0.1` Linux release; they are recorded
-> here so this README is accurate the moment Phase 1 lands. See
-> [Roadmap and status](#roadmap-and-status) for what is next.
+> **Status: design complete, implementation under way.** Every decision for
+> `v0.1` is settled in the [constitution](#project-documentation). Phase 1 has
+> produced a buildable Qt Quick skeleton that opens one empty window on Linux —
+> there is now application code you can compile and run, but no product features
+> and no packaged release yet. The [build-from-source steps](#build-from-source)
+> are live; the install steps still describe the **planned** `v0.1` Linux
+> release. See [Roadmap and status](#roadmap-and-status) for what is next.
 
 ---
 
@@ -104,8 +105,9 @@ both lists before proposing work.
 
 ## Quick start (5 minutes)
 
-There is nothing to install yet. To understand the project and find the next
-unit of work:
+There is no packaged release to install yet, but the repository can already be
+built and launched — see [Build from source](#build-from-source). To understand
+the project and find the next unit of work:
 
 1. Clone it:
    ```bash
@@ -137,9 +139,10 @@ after they are tested.
 
 ---
 
-## Build from source (planned for `v0.1`)
+## Build from source
 
-> Not available yet — `open-woday.pro` does not exist until Phase 1 lands.
+The Phase 1 skeleton builds and runs **now**. Release packaging (AppImage /
+`.deb`) is still planned for `v0.1`.
 
 Prerequisites (checked on the maintainer's machine 2026-11-23):
 
@@ -149,11 +152,14 @@ Prerequisites (checked on the maintainer's machine 2026-11-23):
 
 ```bash
 qmake6 open-woday.pro && make
+./open-woday
 ```
 
-Then run the produced binary; the AppImage above is the supported way to run
-`v0.1`. Packaging uses `linuxdeployqt` to bundle Qt libraries into the AppImage
-and `dpkg-deb` to build the `.deb`. See
+This opens a single, intentionally empty window titled `open-woday` with native
+OS decorations — no product UI, persistence or network yet (Phase 1 ships only
+the runnable build/launch seam). For `v0.1`, the supported distribution will be
+the AppImage above. Packaging uses `linuxdeployqt` to bundle Qt libraries into
+the AppImage and `dpkg-deb` to build the `.deb`. See
 [`dev-docs/tech-stack.md`](dev-docs/tech-stack.md) for the proposed source tree
 and build details.
 
@@ -182,10 +188,14 @@ Full behavioural detail is in [`dev-docs/tech-stack.md`](dev-docs/tech-stack.md)
 
 Design is complete: 22 decisions were settled on 2026-11-23, and on 2026-11-24
 the former plan and ADRs were fully consolidated into the three constitution
-files (nothing was dropped). **No implementation has started** — all 12 `v0.1`
-phases are `planned`, beginning with `phase-1-project-skeleton`. Releases are
-tagged on GitHub, starting with `v0.1`. The full phase list, deferred backlog
-and definition of done are in [`dev-docs/roadmap.md`](dev-docs/roadmap.md).
+files (nothing was dropped). **Implementation has started** with Phase 1 — a
+buildable, runnable Qt Quick skeleton (`open-woday.pro`, one C++ entry point and
+one empty QML window) that opens a native Linux window. It ships no product
+surface yet. No phase has been marked `done` or merged, so all 12 `v0.1` phases
+remain `planned` in [`dev-docs/roadmap.md`](dev-docs/roadmap.md), beginning with
+`phase-1-project-skeleton`. No release has been tagged; releases start with
+`v0.1` on GitHub. The full phase list, deferred backlog and definition of done
+are in the roadmap.
 
 ---
 
@@ -198,6 +208,8 @@ and definition of done are in [`dev-docs/roadmap.md`](dev-docs/roadmap.md).
 | [`dev-docs/roadmap.md`](dev-docs/roadmap.md) | Constitution 3/3 — ordered `v0.1` phases, deferred backlog, definition of done |
 | [`GLOSSARY.md`](GLOSSARY.md) | Canonical vocabulary — use these terms everywhere |
 | [`dev-docs/grill-session.md`](dev-docs/grill-session.md) | Historical design-session record (22 decisions, contradiction log) |
+| `dev-docs/specs/` | Per-phase specs (`requirements.md` / `plan.md` / `validation.md`) |
+| [`CHANGELOG.md`](CHANGELOG.md) | Notable changes per phase, maintained by `/bnvt-documentation` |
 | `.opencode/commands/bnvt-*.md` | The spec-driven workflow commands |
 
 **Internal reference material — not project documentation:**
