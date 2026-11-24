@@ -36,6 +36,10 @@ public:
     // Clear, human-readable diagnostic for a failed open(); empty on success.
     QString lastError() const;
 
+    // Borrow the single SQLite connection for store-layer repositories. The
+    // handle must not be closed or removed; Database owns its lifetime.
+    QSqlDatabase connection() const;
+
 private:
     bool applyMigrations(int currentVersion, int* outVersion);
     int readSchemaVersion(bool* ok);

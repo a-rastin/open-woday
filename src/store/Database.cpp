@@ -196,6 +196,11 @@ QString Database::lastError() const
     return m_error;
 }
 
+QSqlDatabase Database::connection() const
+{
+    return m_db;
+}
+
 int Database::readSchemaVersion(bool* ok)
 {
     *ok = false;
