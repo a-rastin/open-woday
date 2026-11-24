@@ -49,7 +49,7 @@ Derived from the dependency-ordered build order of the former `PLAN.md` §13.
 ### Phase 1 — project-skeleton
 
 - **Branch:** `phase-1-project-skeleton`
-- **Status:** planned
+- **Status:** done
 - **Goal:** a buildable, runnable Qt 6 Quick application skeleton.
 - **Deliverables:** `open-woday.pro` (Qt 6 Quick / Widgets / SQL modules),
   `src/main.cpp`, `src/qml/MainWindow.qml` (empty window), build via
@@ -61,7 +61,7 @@ Derived from the dependency-ordered build order of the former `PLAN.md` §13.
 ### Phase 2 — data-layer
 
 - **Branch:** `phase-2-data-layer`
-- **Status:** planned
+- **Status:** in-progress
 - **Goal:** the local persistence foundation.
 - **Deliverables:** `Database` (schema creation, versioned migrations), the full
   schema (`items`, `blocks`, `folders`, `tags`, `item_tags`, `links`, `meta`),

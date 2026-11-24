@@ -9,35 +9,11 @@
 
 namespace {
 
-// A NULL column is represented by std::nullopt, so an absent optional value is
-// never confused with an empty string or a zero. Bound values only: no Block
-// text is ever concatenated into SQL.
-template <typename T>
-QVariant bindOptional(const std::optional<T>& value)
-{
-    if (!value) {
-        return QVariant();
-    }
-    return QVariant(*value);
-}
-
-std::optional<QString> readOptionalText(const QSqlQuery& query, int field)
-{
-    const QVariant value = query.value(field);
-    if (value.isNull()) {
-        return std::nullopt;
-    }
-    return value.toString();
-}
-
-std::optional<qlonglong> readOptionalId(const QSqlQuery& query, int field)
-{
-    const QVariant value = query.value(field);
-    if (value.isNull()) {
-        return std::nullopt;
-    }
-    return value.toLongLong();
-}
+// Nullable-column helpers live in StoreHelpers.h, shared with
+// ItemRepository, so a change to them is made once.
+using store::bindOptional;
+using store::readOptionalText;
+using store::readOptionalId;
 
 // The one authoritative mapping from a stored row to a Block, in the order of
 // the SELECT statements. Every column of the blocks table has a place here.
@@ -58,7 +34,7 @@ Block blockFromQuery(const QSqlQuery& query)
 } // namespace
 
 BlockRepository::BlockRepository(Database& database)
-    : m_database(database)
+    : StoreRepository(database)
 {
 }
 
@@ -341,32 +317,7 @@ bool BlockRepository::update(const Block& block)
 QList<Block> BlockRepository::select(const QString& statement,
                                     const QVariantList& bindings)
 {
-    m_error.clear();
-
-    QSqlQuery query(m_database.connection());
-    query.prepare(statement);
-    for (const QVariant& value : bindings) {
-        query.addBindValue(value);
-    }
-    if (!query.exec()) {
-        fail(QStringLiteral("could not read Blocks: %1")
-                 .arg(query.lastError().text()));
-        return {};
-    }
-
-    QList<Block> blocks;
-    while (query.next()) {
-        blocks.append(blockFromQuery(query));
-    }
-    return blocks;
-}
-
-QString BlockRepository::lastError() const
-{
-    return m_error;
-}
-
-void BlockRepository::fail(const QString& reason)
-{
-    m_error = reason;
+    return selectRows<Block>(statement, bindings,
+                             QStringLiteral("could not read Blocks"),
+                             blockFromQuery);
 }

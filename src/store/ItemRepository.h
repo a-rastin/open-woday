@@ -1,14 +1,14 @@
 #ifndef OPENWODAY_STORE_ITEMREPOSITORY_H
 #define OPENWODAY_STORE_ITEMREPOSITORY_H
 
+#include "StoreHelpers.h"
+
 #include <QList>
 #include <QString>
 #include <QVariant>
 #include <QtGlobal>
 
 #include <optional>
-
-class Database;
 
 // One Item as it is stored. A Task, Note or Event is one Item of a particular
 // kind (GLOSSARY.md). Every column of the items table is represented here, so
@@ -38,7 +38,7 @@ struct Item
 // ItemRepository is the store-layer API for Items. It writes straight to the
 // single local SQLite file owned by Database; there is no in-memory cache, so
 // a written Item survives a restart of the connection.
-class ItemRepository
+class ItemRepository : public StoreRepository
 {
 public:
     explicit ItemRepository(Database& database);
@@ -78,18 +78,11 @@ public:
     // belongs to a later phase).
     bool softDelete(qlonglong id);
 
-    // Clear, human-readable diagnostic for a failed operation.
-    QString lastError() const;
-
 private:
     // Execute one fixed SELECT statement with bound values and map every row
     // through itemFromQuery(). No SQL is assembled from Item text.
     QList<Item> select(const QString& statement,
                        const QVariantList& bindings);
-    void fail(const QString& reason);
-
-    Database& m_database;
-    QString m_error;
 };
 
 #endif // OPENWODAY_STORE_ITEMREPOSITORY_H

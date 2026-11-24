@@ -5,6 +5,7 @@
 #include <QDateTime>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QStringList>
 #include <QVariant>
 
 namespace {
@@ -15,43 +16,63 @@ QString nowIsoUtc()
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 }
 
-// A NULL column is represented by std::nullopt, so an absent optional value is
-// never confused with an empty string or a zero. Bound values only: no Item
-// text is ever concatenated into SQL.
-template <typename T>
-QVariant bindOptional(const std::optional<T>& value)
+// Nullable-column helpers live in StoreHelpers.h, shared with
+// BlockRepository, so a change to them is made once.
+using store::bindOptional;
+using store::readOptionalText;
+using store::readOptionalInt;
+using store::readOptionalId;
+
+// One authoritative ordered list of the items columns. Every SELECT, INSERT
+// and UPDATE column list is built from it; itemFromQuery() and
+// bindItemFields() mirror its order, so the column shape lives in one place
+// (Duplicated Code / Shotgun Surgery).
+const QStringList kItemColumns = {
+    QStringLiteral("id"),            QStringLiteral("kind"),
+    QStringLiteral("title"),         QStringLiteral("created_at"),
+    QStringLiteral("modified_at"),   QStringLiteral("completed_at"),
+    QStringLiteral("deleted_at"),    QStringLiteral("due_at"),
+    QStringLiteral("due_precision"), QStringLiteral("start_at"),
+    QStringLiteral("end_at"),        QStringLiteral("all_day"),
+    QStringLiteral("priority"),      QStringLiteral("duration_min"),
+    QStringLiteral("parent_id"),     QStringLiteral("folder_id"),
+    QStringLiteral("day"),           QStringLiteral("sort_order")
+};
+
+// Every SELECT selects this one list, optionally qualified for a JOIN.
+QString itemColumns(const QString& qualifier = QString())
 {
-    if (!value) {
-        return QVariant();
+    QStringList columns;
+    columns.reserve(kItemColumns.size());
+    for (const QString& column : kItemColumns) {
+        columns.append(qualifier + column);
     }
-    return QVariant(*value);
+    return columns.join(QStringLiteral(", "));
 }
 
-std::optional<QString> readOptionalText(const QSqlQuery& query, int field)
+// INSERT and UPDATE write every column except the auto-assigned row id, in
+// the same order as the bound values below.
+QString itemWritableColumns()
 {
-    const QVariant value = query.value(field);
-    if (value.isNull()) {
-        return std::nullopt;
-    }
-    return value.toString();
+    return kItemColumns.mid(1).join(QStringLiteral(", "));
 }
 
-std::optional<int> readOptionalInt(const QSqlQuery& query, int field)
+QString itemInsertPlaceholders()
 {
-    const QVariant value = query.value(field);
-    if (value.isNull()) {
-        return std::nullopt;
+    QStringList placeholders;
+    for (int i = 1; i < kItemColumns.size(); ++i) {
+        placeholders.append(QStringLiteral("?"));
     }
-    return value.toInt();
+    return placeholders.join(QStringLiteral(", "));
 }
 
-std::optional<qlonglong> readOptionalId(const QSqlQuery& query, int field)
+QString itemUpdateAssignments()
 {
-    const QVariant value = query.value(field);
-    if (value.isNull()) {
-        return std::nullopt;
+    QStringList assignments;
+    for (int i = 1; i < kItemColumns.size(); ++i) {
+        assignments.append(kItemColumns.at(i) + QStringLiteral(" = ?"));
     }
-    return value.toLongLong();
+    return assignments.join(QStringLiteral(", "));
 }
 
 // The only partial unique index on items is the one-Day-note-per-date rule.
@@ -70,8 +91,8 @@ QString writeFailureMessage(const QSqlQuery& query, const QString& operation,
     return QStringLiteral("%1: %2").arg(operation, dbError);
 }
 
-// The one authoritative mapping from a stored row to an Item. Every column of
-// the items table has a place here, in the order of the SELECT statements.
+// The one authoritative mapping from a stored row to an Item. The indices
+// mirror kItemColumns, the single ordered list every SELECT is built from.
 Item itemFromQuery(const QSqlQuery& query)
 {
     Item item;
@@ -96,10 +117,33 @@ Item itemFromQuery(const QSqlQuery& query)
     return item;
 }
 
+// Bind every writable Item column (all of kItemColumns except the id) in that
+// order, so create() and update() share one binding sequence.
+void bindItemFields(QSqlQuery& query, const Item& item)
+{
+    query.addBindValue(item.kind);
+    query.addBindValue(item.title);
+    query.addBindValue(item.createdAt);
+    query.addBindValue(item.modifiedAt);
+    query.addBindValue(bindOptional(item.completedAt));
+    query.addBindValue(bindOptional(item.deletedAt));
+    query.addBindValue(bindOptional(item.dueAt));
+    query.addBindValue(bindOptional(item.duePrecision));
+    query.addBindValue(bindOptional(item.startAt));
+    query.addBindValue(bindOptional(item.endAt));
+    query.addBindValue(item.allDay ? 1 : 0);
+    query.addBindValue(item.priority);
+    query.addBindValue(bindOptional(item.durationMin));
+    query.addBindValue(bindOptional(item.parentId));
+    query.addBindValue(bindOptional(item.folderId));
+    query.addBindValue(bindOptional(item.day));
+    query.addBindValue(item.sortOrder);
+}
+
 } // namespace
 
 ItemRepository::ItemRepository(Database& database)
-    : m_database(database)
+    : StoreRepository(database)
 {
 }
 
@@ -126,28 +170,9 @@ std::optional<Item> ItemRepository::create(const Item& item)
     }
 
     QSqlQuery query(m_database.connection());
-    query.prepare(QStringLiteral(
-        "INSERT INTO items (kind, title, created_at, modified_at, "
-        "completed_at, deleted_at, due_at, due_precision, start_at, end_at, "
-        "all_day, priority, duration_min, parent_id, folder_id, day, sort_order) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
-    query.addBindValue(stored.kind);
-    query.addBindValue(stored.title);
-    query.addBindValue(stored.createdAt);
-    query.addBindValue(stored.modifiedAt);
-    query.addBindValue(bindOptional(stored.completedAt));
-    query.addBindValue(bindOptional(stored.deletedAt));
-    query.addBindValue(bindOptional(stored.dueAt));
-    query.addBindValue(bindOptional(stored.duePrecision));
-    query.addBindValue(bindOptional(stored.startAt));
-    query.addBindValue(bindOptional(stored.endAt));
-    query.addBindValue(stored.allDay ? 1 : 0);
-    query.addBindValue(stored.priority);
-    query.addBindValue(bindOptional(stored.durationMin));
-    query.addBindValue(bindOptional(stored.parentId));
-    query.addBindValue(bindOptional(stored.folderId));
-    query.addBindValue(bindOptional(stored.day));
-    query.addBindValue(stored.sortOrder);
+    query.prepare(QStringLiteral("INSERT INTO items (%1) VALUES (%2)")
+                      .arg(itemWritableColumns(), itemInsertPlaceholders()));
+    bindItemFields(query, stored);
     if (!query.exec()) {
         fail(writeFailureMessage(query,
                                  QStringLiteral("could not create the Item"),
@@ -168,33 +193,17 @@ std::optional<Item> ItemRepository::create(const Item& item)
 QList<Item> ItemRepository::select(const QString& statement,
                                    const QVariantList& bindings)
 {
-    m_error.clear();
-
-    QSqlQuery query(m_database.connection());
-    query.prepare(statement);
-    for (const QVariant& value : bindings) {
-        query.addBindValue(value);
-    }
-    if (!query.exec()) {
-        fail(QStringLiteral("could not read Items: %1")
-                 .arg(query.lastError().text()));
-        return {};
-    }
-
-    QList<Item> items;
-    while (query.next()) {
-        items.append(itemFromQuery(query));
-    }
-    return items;
+    return selectRows<Item>(statement, bindings,
+                            QStringLiteral("could not read Items"),
+                            itemFromQuery);
 }
 
 std::optional<Item> ItemRepository::readById(qlonglong id)
 {
-    const QList<Item> items = select(QStringLiteral(
-        "SELECT id, kind, title, created_at, modified_at, completed_at, "
-        "deleted_at, due_at, due_precision, start_at, end_at, all_day, "
-        "priority, duration_min, parent_id, folder_id, day, sort_order "
-        "FROM items WHERE id = ? AND deleted_at IS NULL"),
+    const QList<Item> items = select(
+        QStringLiteral("SELECT %1 FROM items "
+                       "WHERE id = ? AND deleted_at IS NULL")
+            .arg(itemColumns()),
         QVariantList{ QVariant(id) });
     if (items.isEmpty()) {
         return std::nullopt;
@@ -204,11 +213,9 @@ std::optional<Item> ItemRepository::readById(qlonglong id)
 
 std::optional<Item> ItemRepository::readByIdIncludingSoftDeleted(qlonglong id)
 {
-    const QList<Item> items = select(QStringLiteral(
-        "SELECT id, kind, title, created_at, modified_at, completed_at, "
-        "deleted_at, due_at, due_precision, start_at, end_at, all_day, "
-        "priority, duration_min, parent_id, folder_id, day, sort_order "
-        "FROM items WHERE id = ?"),
+    const QList<Item> items = select(
+        QStringLiteral("SELECT %1 FROM items WHERE id = ?")
+            .arg(itemColumns()),
         QVariantList{ QVariant(id) });
     if (items.isEmpty()) {
         return std::nullopt;
@@ -218,58 +225,51 @@ std::optional<Item> ItemRepository::readByIdIncludingSoftDeleted(qlonglong id)
 
 QList<Item> ItemRepository::readByKind(const QString& kind)
 {
-    return select(QStringLiteral(
-        "SELECT id, kind, title, created_at, modified_at, completed_at, "
-        "deleted_at, due_at, due_precision, start_at, end_at, all_day, "
-        "priority, duration_min, parent_id, folder_id, day, sort_order "
-        "FROM items WHERE kind = ? AND deleted_at IS NULL "
-        "ORDER BY sort_order, id"),
+    return select(
+        QStringLiteral("SELECT %1 FROM items "
+                       "WHERE kind = ? AND deleted_at IS NULL "
+                       "ORDER BY sort_order, id")
+            .arg(itemColumns()),
         QVariantList{ QVariant(kind) });
 }
 
 QList<Item> ItemRepository::readByDay(const QString& day)
 {
-    return select(QStringLiteral(
-        "SELECT id, kind, title, created_at, modified_at, completed_at, "
-        "deleted_at, due_at, due_precision, start_at, end_at, all_day, "
-        "priority, duration_min, parent_id, folder_id, day, sort_order "
-        "FROM items WHERE day = ? AND deleted_at IS NULL ORDER BY id"),
+    return select(
+        QStringLiteral("SELECT %1 FROM items "
+                       "WHERE day = ? AND deleted_at IS NULL ORDER BY id")
+            .arg(itemColumns()),
         QVariantList{ QVariant(day) });
 }
 
 QList<Item> ItemRepository::readByFolder(qlonglong folderId)
 {
-    return select(QStringLiteral(
-        "SELECT id, kind, title, created_at, modified_at, completed_at, "
-        "deleted_at, due_at, due_precision, start_at, end_at, all_day, "
-        "priority, duration_min, parent_id, folder_id, day, sort_order "
-        "FROM items WHERE folder_id = ? AND deleted_at IS NULL "
-        "ORDER BY sort_order, id"),
+    return select(
+        QStringLiteral("SELECT %1 FROM items "
+                       "WHERE folder_id = ? AND deleted_at IS NULL "
+                       "ORDER BY sort_order, id")
+            .arg(itemColumns()),
         QVariantList{ QVariant(folderId) });
 }
 
 QList<Item> ItemRepository::readByParent(qlonglong parentId)
 {
-    return select(QStringLiteral(
-        "SELECT id, kind, title, created_at, modified_at, completed_at, "
-        "deleted_at, due_at, due_precision, start_at, end_at, all_day, "
-        "priority, duration_min, parent_id, folder_id, day, sort_order "
-        "FROM items WHERE parent_id = ? AND deleted_at IS NULL "
-        "ORDER BY sort_order, id"),
+    return select(
+        QStringLiteral("SELECT %1 FROM items "
+                       "WHERE parent_id = ? AND deleted_at IS NULL "
+                       "ORDER BY sort_order, id")
+            .arg(itemColumns()),
         QVariantList{ QVariant(parentId) });
 }
 
 QList<Item> ItemRepository::readByTag(qlonglong tagId)
 {
-    return select(QStringLiteral(
-        "SELECT items.id, items.kind, items.title, items.created_at, "
-        "items.modified_at, items.completed_at, items.deleted_at, "
-        "items.due_at, items.due_precision, items.start_at, items.end_at, "
-        "items.all_day, items.priority, items.duration_min, items.parent_id, "
-        "items.folder_id, items.day, items.sort_order "
-        "FROM items JOIN item_tags ON item_tags.item_id = items.id "
-        "WHERE item_tags.tag_id = ? AND items.deleted_at IS NULL "
-        "ORDER BY items.sort_order, items.id"),
+    return select(
+        QStringLiteral("SELECT %1 FROM items "
+                       "JOIN item_tags ON item_tags.item_id = items.id "
+                       "WHERE item_tags.tag_id = ? AND items.deleted_at IS NULL "
+                       "ORDER BY items.sort_order, items.id")
+            .arg(itemColumns(QStringLiteral("items."))),
         QVariantList{ QVariant(tagId) });
 }
 
@@ -278,28 +278,9 @@ bool ItemRepository::update(const Item& item)
     m_error.clear();
 
     QSqlQuery query(m_database.connection());
-    query.prepare(QStringLiteral(
-        "UPDATE items SET kind = ?, title = ?, created_at = ?, modified_at = ?, "
-        "completed_at = ?, deleted_at = ?, due_at = ?, due_precision = ?, "
-        "start_at = ?, end_at = ?, all_day = ?, priority = ?, duration_min = ?, "
-        "parent_id = ?, folder_id = ?, day = ?, sort_order = ? WHERE id = ?"));
-    query.addBindValue(item.kind);
-    query.addBindValue(item.title);
-    query.addBindValue(item.createdAt);
-    query.addBindValue(item.modifiedAt);
-    query.addBindValue(bindOptional(item.completedAt));
-    query.addBindValue(bindOptional(item.deletedAt));
-    query.addBindValue(bindOptional(item.dueAt));
-    query.addBindValue(bindOptional(item.duePrecision));
-    query.addBindValue(bindOptional(item.startAt));
-    query.addBindValue(bindOptional(item.endAt));
-    query.addBindValue(item.allDay ? 1 : 0);
-    query.addBindValue(item.priority);
-    query.addBindValue(bindOptional(item.durationMin));
-    query.addBindValue(bindOptional(item.parentId));
-    query.addBindValue(bindOptional(item.folderId));
-    query.addBindValue(bindOptional(item.day));
-    query.addBindValue(item.sortOrder);
+    query.prepare(QStringLiteral("UPDATE items SET %1 WHERE id = ?")
+                      .arg(itemUpdateAssignments()));
+    bindItemFields(query, item);
     query.addBindValue(item.id);
     if (!query.exec()) {
         fail(writeFailureMessage(
@@ -335,14 +316,4 @@ bool ItemRepository::softDelete(qlonglong id)
         return false;
     }
     return true;
-}
-
-QString ItemRepository::lastError() const
-{
-    return m_error;
-}
-
-void ItemRepository::fail(const QString& reason)
-{
-    m_error = reason;
 }

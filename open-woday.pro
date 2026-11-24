@@ -10,6 +10,7 @@ SOURCES += src/main.cpp \
            src/store/BlockRepository.cpp
 
 HEADERS += src/store/Database.h \
+           src/store/StoreHelpers.h \
            src/store/ItemRepository.h \
            src/store/BlockRepository.h
 

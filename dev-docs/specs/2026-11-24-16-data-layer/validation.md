@@ -39,6 +39,13 @@ worth testing".
 - **Reviewer confirmation:** if the maintainer expects a different seam (for
   example a committed smoke-test harness or a CI job in this phase), say so before
   `/bnvt-ticket`; otherwise this single-seam decision stands.
+- **Revise-stage record (confirmation still outstanding).** The increment landed
+  a committed, framework-free `tests/verify-persistence.cpp` (built from
+  `tests/verify-persistence.pro`) as the executable verification of the merge
+  gate. The code review flagged its size as borderline scope creep against the
+  single-seam rule; it is retained because removing it would leave the
+  persistence seam unverified, but it is recorded here as an unconfirmed
+  judgement call, not as maintainer sign-off.
 
 ### What makes a good test here
 
@@ -70,7 +77,9 @@ no CMake.
 
 1. **Configure.** `qmake6 open-woday.pro` exits `0`, emits no errors, and produces
    a Makefile. No `CMakeLists.txt` exists; `QT += quick widgets sql` and C++17 are
-   unchanged.
+   unchanged. The verification program is configured separately from `tests/`
+   with `qmake6 verify-persistence.pro && make` — one additional qmake target,
+   no CMake.
 2. **Compile.** `make` exits `0`, produces the `open-woday` binary, with no
    errors and no new compiler warnings.
 3. **Launch unaffected.** Running the binary still opens the single empty native

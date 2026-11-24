@@ -30,64 +30,18 @@ const Migration kMigrations[] = {
 
 // Split a trusted SQL script into single statements. Qt's SQLite driver refuses
 // to execute more than one statement per QSqlQuery::exec, so the versioned
-// source is applied statement by statement. Semicolons inside quoted strings
-// and inside -- line comments are ignored.
+// source is applied statement by statement. The schema source is trusted v0.1
+// DDL with no semicolons inside quoted strings or comments, so a plain split
+// on ';' is all that is needed (tech-stack.md §7.1: simple versioned SQL).
 QStringList splitSqlStatements(const QString& script)
 {
     QStringList statements;
-    QString current;
-    bool inString = false;
-    QChar quote;
-    const int size = script.size();
-
-    for (int i = 0; i < size; ++i) {
-        const QChar c = script.at(i);
-
-        if (inString) {
-            current += c;
-            if (c == quote) {
-                // A doubled quote is an escaped quote, not the end of the string.
-                if (i + 1 < size && script.at(i + 1) == quote) {
-                    current += script.at(i + 1);
-                    ++i;
-                } else {
-                    inString = false;
-                }
-            }
-            continue;
+    const QStringList chunks = script.split(QLatin1Char(';'));
+    for (const QString& chunk : chunks) {
+        const QString statement = chunk.trimmed();
+        if (!statement.isEmpty()) {
+            statements.append(statement);
         }
-
-        if (c == QLatin1Char('\'') || c == QLatin1Char('"')) {
-            inString = true;
-            quote = c;
-            current += c;
-            continue;
-        }
-
-        if (c == QLatin1Char('-') && i + 1 < size
-            && script.at(i + 1) == QLatin1Char('-')) {
-            while (i < size && script.at(i) != QLatin1Char('\n')) {
-                ++i;
-            }
-            current += QLatin1Char('\n');
-            continue;
-        }
-
-        if (c == QLatin1Char(';')) {
-            const QString statement = current.trimmed();
-            if (!statement.isEmpty()) {
-                statements.append(statement);
-            }
-            current.clear();
-            continue;
-        }
-
-        current += c;
-    }
-
-    const QString tail = current.trimmed();
-    if (!tail.isEmpty()) {
-        statements.append(tail);
     }
     return statements;
 }

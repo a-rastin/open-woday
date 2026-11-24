@@ -26,7 +26,7 @@ Today page and its Day note, Task CRUD, the block editor, the Inbox rail, Quick
 Add and CSV export — needs a durable, local foundation to read from and write to.
 Before any product surface can be shown, the app must be able to create its
 database on first launch, keep it across restarts, and let the code above it
-create, read, update and soft-delete the core domain objects.
+create, read, update and soft-delete the core domain Items.
 
 ## Solution
 
@@ -34,13 +34,13 @@ Ship the **local persistence foundation** as the next runnable, verifiable
 increment: a single local SQLite file (via Qt SQL) whose full v0.1 schema is
 created on first launch, governed by simple versioned migrations recorded in a
 `meta` schema-version row, and exposed to C++ through two repositories — one for
-Items and one for Blocks — that can create, read, update and soft-delete their
-objects. All writes go straight to SQLite; there is no network, no account, no
-cloud, no sync and no in-memory-only state. The increment is proven through a
-single, high-level seam: write data, close the app (or the connection), reopen it,
-and read the same data back unchanged. Deliberately, no product UI is added: the
-window stays empty, the layers stay clean, and no downstream phase's work is
-pulled forward. This is the first phase where the app becomes capable of
+Items and one for Blocks — that can create, read, update and soft-delete
+Items and Blocks. All writes go straight to SQLite; there is no network, no
+account, no cloud, no sync and no in-memory-only state. The increment is proven
+through a single, high-level seam: write data, close the app (or the connection),
+reopen it, and read the same data back unchanged. Deliberately, no product UI is
+added: the window stays empty, the layers stay clean, and no downstream phase's
+work is pulled forward. This is the first phase where the app becomes capable of
 *remembering* anything, which is what the local-first principle (D3, D21) requires.
 
 ## Context
@@ -149,7 +149,7 @@ non-demoable horizontal layer.
 26. As a contributor, I want deletion implemented as a soft-delete via `deleted_at`, so that no hard delete or Trash UI is introduced prematurely (`tech-stack.md` §10.3).
 27. As a contributor, I want soft-deleted rows excluded from normal reads while remaining in the file, so that CSV export (Phase 10) can later honour the "soft-deleted rows excluded" rule.
 28. As a contributor, I want a clear error when a duplicate Day note date is inserted, so that the one-note-per-day rule is enforceable rather than silent.
-29. As a contributor, I want a `BlockRepository` that can create, read, update, delete and reorder Blocks, so that the Phase 6 editor can persist its document model.
+29. As a contributor, I want a `BlockRepository` that can create, read, update, delete and reorder Blocks, so that the Phase 6 editor can persist its Notes.
 30. As a contributor, I want `inline_json`, `task_id` and `indent` to round-trip, so that inline formatting, to-do→Task links and indentation survive persistence.
 31. As a contributor, I want Blocks kept ordered by `position` within their owning Item, so that a Note reads back in the order it was written.
 32. As a contributor, I want Blocks stored as rows rather than a JSON blob, so that per-block editing and the to-do `task_id` foreign key stay simple (`tech-stack.md` §7.3).

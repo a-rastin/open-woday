@@ -156,8 +156,9 @@ qmake6 open-woday.pro && make
 ```
 
 This opens a single, intentionally empty window titled `open-woday` with native
-OS decorations — no product UI, persistence or network yet (Phase 1 ships only
-the runnable build/launch seam). For `v0.1`, the supported distribution will be
+OS decorations — no product UI or network yet (Phase 1 ships only the
+runnable build/launch seam; Phase 2 adds the local database at startup). For
+`v0.1`, the supported distribution will be
 the AppImage above. Packaging uses `linuxdeployqt` to bundle Qt libraries into
 the AppImage and `dpkg-deb` to build the `.deb`. See
 [`dev-docs/tech-stack.md`](dev-docs/tech-stack.md) for the proposed source tree
@@ -188,14 +189,15 @@ Full behavioural detail is in [`dev-docs/tech-stack.md`](dev-docs/tech-stack.md)
 
 Design is complete: 22 decisions were settled on 2026-11-23, and on 2026-11-24
 the former plan and ADRs were fully consolidated into the three constitution
-files (nothing was dropped). **Implementation has started** with Phase 1 — a
+files (nothing was dropped). **Implementation is under way.** Phase 1 — a
 buildable, runnable Qt Quick skeleton (`open-woday.pro`, one C++ entry point and
-one empty QML window) that opens a native Linux window. It ships no product
-surface yet. No phase has been marked `done` or merged, so all 12 `v0.1` phases
-remain `planned` in [`dev-docs/roadmap.md`](dev-docs/roadmap.md), beginning with
-`phase-1-project-skeleton`. No release has been tagged; releases start with
-`v0.1` on GitHub. The full phase list, deferred backlog and definition of done
-are in the roadmap.
+one empty QML window) that opens a native Linux window, shipping no product
+surface — was reviewed, documented and merged to `main` (PR #1); it is marked
+`done` in [`dev-docs/roadmap.md`](dev-docs/roadmap.md). Phase 2 — data-layer is
+`in-progress` on `phase-2-data-layer` and, as the lowest-numbered phase not
+marked `done`, is the next unit of work. No release has been tagged; releases
+start with `v0.1` on GitHub. The full phase list, deferred backlog and
+definition of done are in the roadmap.
 
 ---
 

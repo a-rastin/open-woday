@@ -1,14 +1,14 @@
 #ifndef OPENWODAY_STORE_BLOCKREPOSITORY_H
 #define OPENWODAY_STORE_BLOCKREPOSITORY_H
 
+#include "StoreHelpers.h"
+
 #include <QList>
 #include <QString>
 #include <QVariant>
 #include <QtGlobal>
 
 #include <optional>
-
-class Database;
 
 // One Block: one line of a Note's content (GLOSSARY.md). A to-do Block is a
 // Block type, not a synonym for a Task; taskId optionally points at the real
@@ -29,7 +29,7 @@ struct Block
 // BlockRepository is the store-layer API for Blocks. It writes straight to the
 // single local SQLite file owned by Database; there is no in-memory cache, so
 // a written Block survives a restart of the connection.
-class BlockRepository
+class BlockRepository : public StoreRepository
 {
 public:
     explicit BlockRepository(Database& database);
@@ -61,18 +61,11 @@ public:
     // Returns false and sets lastError() on failure.
     bool update(const Block& block);
 
-    // Clear, human-readable diagnostic for a failed operation.
-    QString lastError() const;
-
 private:
     // Execute one fixed SELECT statement with bound values and map every row
     // through blockFromQuery(). No SQL is assembled from Block text.
     QList<Block> select(const QString& statement,
                         const QVariantList& bindings);
-    void fail(const QString& reason);
-
-    Database& m_database;
-    QString m_error;
 };
 
 #endif // OPENWODAY_STORE_BLOCKREPOSITORY_H
