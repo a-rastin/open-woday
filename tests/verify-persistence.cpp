@@ -1,8 +1,11 @@
-// The single high-level persistence seam of Phase 2 (issues 02, 03 and 04):
+// The single high-level persistence seam of Phase 2 (issues 02, 03, 04 and 05):
 // Items and Blocks are written through the store layer, the Database connection
 // is closed and reopened against the same local SQLite file, and everything is
 // read back through the same public API — with every column, kind, query shape,
-// update, soft-delete, Block order and constraint error intact.
+// update, soft-delete, Block order and constraint error intact. Issue 05 adds the
+// merge-gate scenario: one representative set of Items of all kinds and Blocks
+// of all five types, observed with the first-launch schema version and the
+// persisted meta version through Database::schemaVersion().
 //
 // This is an executable specification, not a test framework: no QtTest, no
 // catch/gtest, no CI configuration, no mocks, no assertions about SQL strings
@@ -14,6 +17,7 @@
 
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QFile>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QString>
@@ -1981,6 +1985,347 @@ int deletingAnItemCascadesToItsBlocks()
     return 0;
 }
 
+// Issue 05 — the Phase 2 merge gate at the single high-level persistence seam.
+// One representative set of Items of all three kinds (a Task, a Note and an
+// Event), one soft-deleted Task, and Blocks of all five types belonging to that
+// Note is written on a first launch. The connection is closed (the app restart),
+// the same file is reopened through a fresh Database, and everything is read
+// back unchanged through the public repository interfaces.
+//
+// The schema version is observed through Database::schemaVersion() — the public
+// interface that reads the persisted meta row — rather than through a raw SQL
+// side channel. A successful second open() shows the already-applied migration
+// was skipped: re-running the versioned schema (plain CREATE TABLE, with no IF
+// NOT EXISTS) against the existing tables would make open() fail. The version
+// staying at the known literal and all data reading back unchanged show the
+// schema was left intact and no table holding user data was rebuilt; writing in
+// one session and reading in another shows no state lives only in memory.
+int mergeGateRepresentativeSetSurvivesRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0) {
+        return 1;
+    }
+
+    // Migration 1 (v0.1) is the one versioned schema in the single versioned
+    // SQL source. This is an independent known literal, not recomputed here.
+    const int expectedSchemaVersion = 1;
+
+    // Independent, canonical literal values for the representative set.
+    const QString taskTitle = QStringLiteral("Reply to Anna");
+    const std::optional<QString> taskDueAt =
+        QStringLiteral("2026-12-01T09:00:00Z");
+    const std::optional<QString> taskDuePrecision = QStringLiteral("time");
+    const std::optional<int> taskDurationMin = 45;
+    const int taskPriority = 3;
+
+    const QString noteTitle = QStringLiteral("Tuesday");
+    const std::optional<QString> noteDay = QStringLiteral("2026-11-24");
+
+    const QString eventTitle = QStringLiteral("Design review");
+    const std::optional<QString> eventStartAt =
+        QStringLiteral("2026-11-25T10:00:00Z");
+    const std::optional<QString> eventEndAt =
+        QStringLiteral("2026-11-25T11:00:00Z");
+    const std::optional<int> eventDurationMin = 60;
+
+    const QString archivedTaskTitle = QStringLiteral("Archived Task");
+
+    // Five Block types in order, each with its own independent literal values.
+    struct BlockSpec {
+        QString type;
+        QString content;
+        std::optional<QString> inlineJson;
+        std::optional<qlonglong> taskId;
+        int indent = 0;
+    };
+    QList<BlockSpec> blockSpecs = {
+        { QStringLiteral("text"),    QStringLiteral("A plain line"),
+          std::nullopt, std::nullopt, 0 },
+        { QStringLiteral("heading"), QStringLiteral("A heading"),
+          std::nullopt, std::nullopt, 0 },
+        { QStringLiteral("todo"),    QStringLiteral("A to-do line"),
+          QStringLiteral("[{\"start\":0,\"end\":2,\"type\":\"italic\"}]"),
+          std::nullopt, 1 },
+        { QStringLiteral("bullet"),  QStringLiteral("A bullet point"),
+          std::nullopt, std::nullopt, 2 },
+        { QStringLiteral("code"),    QStringLiteral("int main() { return 0; }"),
+          std::nullopt, std::nullopt, 0 },
+    };
+
+    qlonglong taskId = 0;
+    qlonglong noteId = 0;
+    qlonglong eventId = 0;
+    qlonglong archivedTaskId = 0;
+    QList<qlonglong> blockIds;
+
+    // First launch: the schema and its meta version are created, then the whole
+    // representative set is written through the repositories.
+    {
+        Database firstLaunch;
+        if (!firstLaunch.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be opened on first launch: %1")
+                            .arg(firstLaunch.lastError()));
+        }
+        if (!check(firstLaunch.schemaVersion() == expectedSchemaVersion,
+                   QStringLiteral(
+                       "the versioned schema was not applied on first launch"))) {
+            return 1;
+        }
+        if (!check(firstLaunch.lastError().isEmpty(),
+                   QStringLiteral("first launch reported a diagnostic"))) {
+            return 1;
+        }
+        const QString databasePath = Database::defaultDataDirectory()
+            + QStringLiteral("/") + Database::databaseFileName();
+        if (!check(QFile::exists(databasePath),
+                   QStringLiteral(
+                       "the single local SQLite file was not created on first "
+                       "launch"))) {
+            return 1;
+        }
+
+        ItemRepository items(firstLaunch);
+        BlockRepository blocks(firstLaunch);
+
+        Item task;
+        task.kind = QStringLiteral("task");
+        task.title = taskTitle;
+        task.dueAt = taskDueAt;
+        task.duePrecision = taskDuePrecision;
+        task.durationMin = taskDurationMin;
+        task.priority = taskPriority;
+        task.sortOrder = 1;
+        const std::optional<Item> createdTask = items.create(task);
+        if (!createdTask) {
+            return fail(QStringLiteral("the Task Item could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        taskId = createdTask->id;
+
+        Item note;
+        note.kind = QStringLiteral("note");
+        note.title = noteTitle;
+        note.day = noteDay;
+        note.sortOrder = 2;
+        const std::optional<Item> createdNote = items.create(note);
+        if (!createdNote) {
+            return fail(QStringLiteral("the Note Item could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteId = createdNote->id;
+
+        Item event;
+        event.kind = QStringLiteral("event");
+        event.title = eventTitle;
+        event.startAt = eventStartAt;
+        event.endAt = eventEndAt;
+        event.allDay = true;
+        event.durationMin = eventDurationMin;
+        event.priority = 1;
+        event.sortOrder = 3;
+        const std::optional<Item> createdEvent = items.create(event);
+        if (!createdEvent) {
+            return fail(QStringLiteral("the Event Item could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        eventId = createdEvent->id;
+
+        // One more Task is soft-deleted so the merge gate can confirm the row is
+        // hidden from normal reads but stays in the file across the restart.
+        Item archivedTask;
+        archivedTask.kind = QStringLiteral("task");
+        archivedTask.title = archivedTaskTitle;
+        archivedTask.sortOrder = 4;
+        const std::optional<Item> createdArchived = items.create(archivedTask);
+        if (!createdArchived) {
+            return fail(QStringLiteral(
+                            "the Task Item to soft-delete could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        archivedTaskId = createdArchived->id;
+        if (!items.softDelete(archivedTaskId)) {
+            return fail(QStringLiteral(
+                            "the Task Item could not be soft-deleted: %1")
+                            .arg(items.lastError()));
+        }
+
+        // A to-do Block points at the real Task Item it represents; a to-do
+        // Block is a Block type, not a synonym for a Task.
+        blockSpecs[2].taskId = taskId;
+        for (const BlockSpec& spec : blockSpecs) {
+            Block block;
+            block.itemId = noteId;
+            block.type = spec.type;
+            block.content = spec.content;
+            block.inlineJson = spec.inlineJson;
+            block.taskId = spec.taskId;
+            block.indent = spec.indent;
+            const std::optional<Block> created = blocks.create(block);
+            if (!created) {
+                return fail(QStringLiteral(
+                                "a Block of type '%1' could not be created: %2")
+                                .arg(spec.type, blocks.lastError()));
+            }
+            blockIds.append(created->id);
+        }
+        // The Database destructor closes the connection: the app restart.
+    }
+
+    // Reopen through a fresh Database: this is the relaunch against the same
+    // local SQLite file, with no in-memory state carried over.
+    {
+        Database afterRestart;
+        // A successful reopen shows the already-applied migration was skipped:
+        // re-running the versioned schema against the existing tables would
+        // make open() fail. No table holding user data was rebuilt.
+        if (!afterRestart.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be reopened after the "
+                            "restart: %1")
+                            .arg(afterRestart.lastError()));
+        }
+        if (!check(afterRestart.lastError().isEmpty(),
+                   QStringLiteral("the reopen reported a diagnostic"))) {
+            return 1;
+        }
+        if (!check(afterRestart.schemaVersion() == expectedSchemaVersion,
+                   QStringLiteral(
+                       "the meta schema version did not survive the restart "
+                       "unchanged"))) {
+            return 1;
+        }
+
+        ItemRepository items(afterRestart);
+        BlockRepository blocks(afterRestart);
+
+        // Every Item of all three kinds reads back unchanged.
+        const std::optional<Item> readTask = items.readById(taskId);
+        if (!readTask) {
+            return fail(QStringLiteral(
+                            "the Task Item was not readable after the restart: %1")
+                            .arg(items.lastError()));
+        }
+        if (!check(readTask->id == taskId
+                       && readTask->kind == QStringLiteral("task")
+                       && readTask->title == taskTitle
+                       && readTask->dueAt == taskDueAt
+                       && readTask->duePrecision == taskDuePrecision
+                       && readTask->durationMin == taskDurationMin
+                       && readTask->priority == taskPriority
+                       && readTask->sortOrder == 1
+                       && readTask->deletedAt == std::nullopt,
+                   QStringLiteral(
+                       "the Task Item did not survive the restart unchanged"))) {
+            return 1;
+        }
+
+        const std::optional<Item> readNote = items.readById(noteId);
+        if (!readNote) {
+            return fail(QStringLiteral(
+                            "the Note Item was not readable after the restart: %1")
+                            .arg(items.lastError()));
+        }
+        if (!check(readNote->id == noteId
+                       && readNote->kind == QStringLiteral("note")
+                       && readNote->title == noteTitle
+                       && readNote->day == noteDay
+                       && readNote->sortOrder == 2,
+                   QStringLiteral(
+                       "the Note Item did not survive the restart unchanged"))) {
+            return 1;
+        }
+
+        const std::optional<Item> readEvent = items.readById(eventId);
+        if (!readEvent) {
+            return fail(QStringLiteral(
+                            "the Event Item was not readable after the restart: %1")
+                            .arg(items.lastError()));
+        }
+        if (!check(readEvent->id == eventId
+                       && readEvent->kind == QStringLiteral("event")
+                       && readEvent->title == eventTitle
+                       && readEvent->startAt == eventStartAt
+                       && readEvent->endAt == eventEndAt
+                       && readEvent->allDay == true
+                       && readEvent->durationMin == eventDurationMin
+                       && readEvent->priority == 1
+                       && readEvent->sortOrder == 3,
+                   QStringLiteral(
+                       "the Event Item did not survive the restart unchanged"))) {
+            return 1;
+        }
+
+        // All three kinds are readable by kind; the soft-deleted Task is
+        // excluded from that normal read.
+        if (!check(items.readByKind(QStringLiteral("task")).size() == 1,
+                   QStringLiteral(
+                       "reading Tasks by kind did not exclude the soft-deleted "
+                       "Item"))) {
+            return 1;
+        }
+        if (!check(items.readByKind(QStringLiteral("note")).size() == 1,
+                   QStringLiteral("the Note Item did not read back by kind"))) {
+            return 1;
+        }
+        if (!check(items.readByKind(QStringLiteral("event")).size() == 1,
+                   QStringLiteral("the Event Item did not read back by kind"))) {
+            return 1;
+        }
+
+        // The soft-deleted row is hidden from normal reads but remains in the
+        // file, observed through the store-layer read (not a Trash UI).
+        if (!check(!items.readById(archivedTaskId),
+                   QStringLiteral(
+                       "a soft-deleted Item was returned by a normal read"))) {
+            return 1;
+        }
+        const std::optional<Item> storedArchived =
+            items.readByIdIncludingSoftDeleted(archivedTaskId);
+        if (!check(storedArchived.has_value(),
+                   QStringLiteral(
+                       "the soft-deleted row did not remain in the file"))) {
+            return 1;
+        }
+        if (!check(storedArchived->title == archivedTaskTitle
+                       && storedArchived->kind == QStringLiteral("task")
+                       && storedArchived->deletedAt.has_value()
+                       && QDateTime::fromString(*storedArchived->deletedAt,
+                                                Qt::ISODate).isValid(),
+                   QStringLiteral(
+                       "the soft-deleted Item's fields or deleted_at changed"))) {
+            return 1;
+        }
+
+        // All five Block types read back in order with every field unchanged.
+        const QList<Block> read = blocks.readByItem(noteId);
+        if (!check(read.size() == blockSpecs.size(),
+                   QStringLiteral(
+                       "the Note's Blocks did not all survive the restart"))) {
+            return 1;
+        }
+        for (int i = 0; i < blockSpecs.size(); ++i) {
+            const Block& block = read.at(i);
+            const BlockSpec& spec = blockSpecs.at(i);
+            if (!check(block.id == blockIds.at(i)
+                           && block.itemId == noteId
+                           && block.position == i
+                           && block.type == spec.type
+                           && block.content == spec.content
+                           && block.inlineJson == spec.inlineJson
+                           && block.taskId == spec.taskId
+                           && block.indent == spec.indent,
+                       QStringLiteral(
+                           "a Block did not survive the restart unchanged"))) {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
@@ -2113,10 +2458,15 @@ int main(int argc, char* argv[])
     if (deletingAnItemCascadesToItsBlocks() != 0) {
         return 1;
     }
+    if (mergeGateRepresentativeSetSurvivesRestart() != 0) {
+        return 1;
+    }
 
-    std::puts("verify-persistence: PASS - Items of every kind and Blocks of "
-              "every type, with every field, update, soft-delete, query shape, "
-              "Block order, cascade and constraint error, survive a restart "
-              "unchanged");
+    std::puts("verify-persistence: PASS - the Phase 2 merge gate holds: one "
+              "representative set of Items of every kind and Blocks of every "
+              "type, with every field, query shape, update, soft-delete, Block "
+              "order, cascade and constraint error, survives a restart "
+              "unchanged; the schema is created on first launch, left intact on "
+              "reopen, and the persisted schema version survives");
     return 0;
 }
