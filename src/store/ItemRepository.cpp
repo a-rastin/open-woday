@@ -122,7 +122,12 @@ Item itemFromQuery(const QSqlQuery& query)
 void bindItemFields(QSqlQuery& query, const Item& item)
 {
     query.addBindValue(item.kind);
-    query.addBindValue(item.title);
+    // items.title is NOT NULL DEFAULT '', but every writable column is bound
+    // explicitly, so the schema default never applies. A default-constructed
+    // (null) QString would otherwise bind as SQL NULL and violate the NOT NULL
+    // constraint. Supply a non-null empty string so create() and update() both
+    // store an untitled Item as the schema's empty-string default.
+    query.addBindValue(item.title.isNull() ? QStringLiteral("") : item.title);
     query.addBindValue(item.createdAt);
     query.addBindValue(item.modifiedAt);
     query.addBindValue(bindOptional(item.completedAt));
@@ -162,6 +167,13 @@ std::optional<Item> ItemRepository::create(const Item& item)
     const QString timestamp = nowIsoUtc();
 
     Item stored = item;
+    // Mirror the value actually stored: a null title is written as the empty
+    // string (see bindItemFields), so the returned Item carries that same
+    // non-null empty string rather than a null QString that would disagree
+    // with a subsequent read-back.
+    if (stored.title.isNull()) {
+        stored.title = QStringLiteral("");
+    }
     if (stored.createdAt.isEmpty()) {
         stored.createdAt = timestamp;
     }

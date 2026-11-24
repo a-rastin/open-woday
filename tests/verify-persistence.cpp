@@ -2467,6 +2467,143 @@ int mergeGateRepresentativeSetSurvivesRestart()
     return 0;
 }
 
+// Regression: a default-constructed (null) QString title must not be bound as
+// SQL NULL. items.title is NOT NULL DEFAULT '', but every writable column is
+// bound explicitly, so the schema default never applies and a null title would
+// violate the constraint. An Item created without assigning a title is stored
+// as the empty string, round-trips through a restart, and stays updatable with
+// a null title — exercising both the create() and update() binding paths.
+int untitledItemRoundTripsThroughCreateAndUpdate()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0) {
+        return 1;
+    }
+
+    const QString kind = QStringLiteral("task");
+    qlonglong id = 0;
+    Item written;
+
+    // First session: create an Item with no title assigned, then close the
+    // connection (the app restart).
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be opened on first launch: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        Item item;
+        item.kind = kind;
+        // Deliberately leave item.title unassigned: a default-constructed
+        // QString is null, not empty.
+        if (!check(item.title.isNull(),
+                   QStringLiteral(
+                       "the fixture Item's title is not a null QString"))) {
+            return 1;
+        }
+
+        const std::optional<Item> created = items.create(item);
+        if (!created) {
+            return fail(QStringLiteral(
+                            "an untitled Item could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        written = *created;
+    }
+
+    if (!check(written.id > 0,
+               QStringLiteral("the untitled Item has no assigned id"))) {
+        return 1;
+    }
+    id = written.id;
+    // The returned Item matches the stored value: a non-null, empty title
+    // (not a null QString that would disagree with a read-back).
+    if (!check(!written.title.isNull() && written.title.isEmpty(),
+               QStringLiteral(
+                   "create returned a null or non-empty title rather than the "
+                   "stored empty string"))) {
+        return 1;
+    }
+
+    // Second session: reopen and read the Item back, then update it with a
+    // null title to exercise the shared binding path in update() too.
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be reopened after the "
+                            "restart: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        const std::optional<Item> read = items.readById(id);
+        if (!read) {
+            return fail(QStringLiteral(
+                            "the untitled Item was not readable after the "
+                            "restart: %1")
+                            .arg(items.lastError()));
+        }
+        if (!check(read->id == id && read->kind == kind,
+                   QStringLiteral(
+                       "the untitled Item's id or kind changed"))) {
+            return 1;
+        }
+        if (!check(!read->title.isNull() && read->title.isEmpty(),
+                   QStringLiteral(
+                       "the untitled Item's title did not round-trip as a "
+                       "non-null empty string"))) {
+            return 1;
+        }
+
+        Item revised = *read;
+        revised.title = QString();   // explicitly null again
+        revised.priority = 2;
+        if (!check(revised.title.isNull(),
+                   QStringLiteral(
+                       "the update fixture's title is not a null QString"))) {
+            return 1;
+        }
+        if (!items.update(revised)) {
+            return fail(QStringLiteral(
+                            "an untitled Item could not be updated: %1")
+                            .arg(items.lastError()));
+        }
+    }
+
+    // Third session: after another restart, the empty-string title and the
+    // changed priority both survive the null-title update.
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be reopened after the "
+                            "update: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        const std::optional<Item> read = items.readById(id);
+        if (!read) {
+            return fail(QStringLiteral(
+                            "the updated untitled Item was not readable: %1")
+                            .arg(items.lastError()));
+        }
+        if (!check(!read->title.isNull() && read->title.isEmpty()
+                       && read->priority == 2,
+                   QStringLiteral(
+                       "the untitled Item did not survive a null-title "
+                       "update"))) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
@@ -2561,6 +2698,9 @@ int main(int argc, char* argv[])
     }
 
     if (fullItemColumnsSurviveRestart() != 0) {
+        return 1;
+    }
+    if (untitledItemRoundTripsThroughCreateAndUpdate() != 0) {
         return 1;
     }
     if (itemsOfAllKindsAndQueriesSurviveRestart() != 0) {
