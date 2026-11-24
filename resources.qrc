@@ -2,4 +2,7 @@
     <qresource prefix="/qml">
         <file alias="MainWindow.qml">src/qml/MainWindow.qml</file>
     </qresource>
+    <qresource prefix="/store">
+        <file alias="schema.sql">src/store/schema.sql</file>
+    </qresource>
 </RCC>
