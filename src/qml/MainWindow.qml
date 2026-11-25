@@ -21,9 +21,22 @@ Window {
     }
 
     Sidebar {
+        id: sidebar
         anchors.left: parent.left
         anchors.top: topBar.bottom
         anchors.bottom: parent.bottom
+        theme: window.theme
+    }
+
+    CentrePanel {
+        anchors.left: sidebar.right
+        anchors.leftMargin: window.theme.gap
+        anchors.right: parent.right
+        anchors.rightMargin: window.theme.gap
+        anchors.top: topBar.bottom
+        anchors.topMargin: window.theme.gap
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: window.theme.gap
         theme: window.theme
     }
 }
