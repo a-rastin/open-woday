@@ -103,7 +103,10 @@ int todayDataSurvivesRestartTogether()
         TodayModel model(database);
         model.setDayNoteText(writing);
         model.addTask(QStringLiteral("Pack lunch"));
-        if (!check(!model.lines().isEmpty(), QStringLiteral("Task line missing")))
+        if (!check(model.lines().size() == 2
+                       && model.lines().first().toMap().value(QStringLiteral("kind"))
+                           == QStringLiteral("task"),
+                   QStringLiteral("Task and Event lines missing")))
             return 1;
         taskId = model.lines().first().toMap().value(QStringLiteral("id")).toString();
         if (!check(model.setTaskCompleted(taskId, true),
@@ -115,7 +118,8 @@ int todayDataSurvivesRestartTogether()
             return 1;
         noteId = notes.first().id;
         model.selectDate(tomorrow);
-        if (!check(items.readByDay(tomorrow).size() == 1 && model.dayNoteText().isEmpty(),
+        if (!check(items.readByDay(tomorrow).size() == 1 && model.dayNoteText().isEmpty()
+                       && model.lines().isEmpty(),
                    QStringLiteral("opening another date did not create its Day note")))
             return 1;
         model.selectDate(today);
@@ -145,14 +149,22 @@ int todayDataSurvivesRestartTogether()
                    QStringLiteral("Day note or ordered writing changed after restart")))
             return 1;
         bool completedTaskVisible = false;
+        bool eventVisible = false;
         for (const QVariant& line : model.lines()) {
             const QVariantMap values = line.toMap();
             if (values.value(QStringLiteral("id")).toString() == taskId
+                && values.value(QStringLiteral("kind")) == QStringLiteral("task")
                 && values.value(QStringLiteral("title")) == QStringLiteral("Pack lunch")
                 && values.value(QStringLiteral("completed")).toBool())
                 completedTaskVisible = true;
+            if (values.value(QStringLiteral("id")).toString() == QString::number(eventId)
+                && values.value(QStringLiteral("kind")) == QStringLiteral("event")
+                && values.value(QStringLiteral("title")) == QStringLiteral("Design review")
+                && !values.contains(QStringLiteral("completed")))
+                eventVisible = true;
         }
-        if (!check(task && task->completedAt && completedTaskVisible
+        if (!check(model.lines().size() == 2 && task && task->completedAt && completedTaskVisible
+                       && eventVisible
                        && event && event->title == QStringLiteral("Design review")
                        && event->startAt == today + QStringLiteral("T10:00:00")
                        && event->endAt == today + QStringLiteral("T11:00:00")
@@ -160,7 +172,8 @@ int todayDataSurvivesRestartTogether()
                    QStringLiteral("Task, Event or summary changed after restart")))
             return 1;
         model.selectDate(tomorrow);
-        if (!check(items.readByDay(tomorrow).size() == 1 && model.dayNoteText().isEmpty(),
+        if (!check(items.readByDay(tomorrow).size() == 1 && model.dayNoteText().isEmpty()
+                       && model.lines().isEmpty(),
                    QStringLiteral("the other Day note was not reused after restart")))
             return 1;
     }

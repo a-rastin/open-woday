@@ -305,6 +305,7 @@ void TodayModel::refreshLinesAndSummary()
             ++tasks;
             lines.append(QVariantMap{
                 {QStringLiteral("id"), QString::number(item.id)},
+                {QStringLiteral("kind"), kTaskKind},
                 {QStringLiteral("title"), item.title},
                 {QStringLiteral("completed"), item.completedAt.has_value()},
             });
@@ -317,6 +318,11 @@ void TodayModel::refreshLinesAndSummary()
     for (const Item& item : eventItems) {
         if (item.startAt && item.startAt->left(10) == selectedDate()) {
             ++events;
+            lines.append(QVariantMap{
+                {QStringLiteral("id"), QString::number(item.id)},
+                {QStringLiteral("kind"), kEventKind},
+                {QStringLiteral("title"), item.title},
+            });
         }
     }
 

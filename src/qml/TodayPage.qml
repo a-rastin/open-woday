@@ -71,17 +71,37 @@ Item {
         }
         Repeater {
             model: todayModel.lines
-            delegate: CheckBox {
+            delegate: Loader {
                 required property var modelData
                 width: taskLines.width
-                text: modelData.title
-                checked: modelData.completed
+                sourceComponent: modelData.kind === "event" ? eventLine : taskLine
+            }
+        }
+        Component {
+            id: eventLine
+            Text {
+                width: taskLines.width
+                height: 40
+                text: qsTr("Event: %1").arg(parent.modelData.title)
+                color: page.theme.panelText
+                font.family: page.theme.font
+                font.pixelSize: page.theme.bodySize
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+            }
+        }
+        Component {
+            id: taskLine
+            CheckBox {
+                width: taskLines.width
+                text: parent.modelData.title
+                checked: parent.modelData.completed
                 font.family: page.theme.font
                 font.pixelSize: page.theme.bodySize
                 // The stored Item controls the check state, including when a
                 // write fails; clicking must not break the checked binding.
                 nextCheckState: function() { return checkState }
-                onClicked: todayModel.setTaskCompleted(modelData.id, !modelData.completed)
+                onClicked: todayModel.setTaskCompleted(parent.modelData.id, !parent.modelData.completed)
                 indicator: Rectangle {
                     x: 0
                     y: (parent.height - height) / 2
