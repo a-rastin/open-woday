@@ -10,6 +10,10 @@ Window {
 
     readonly property Theme theme: Theme {}
 
+    // Preserve the centre surface by folding the Sidebar before the RightRail.
+    readonly property bool showSidebar: width >= 720
+    readonly property bool showRightRail: width >= 560
+
     color: theme.canvas
 
     TopBar {
@@ -25,6 +29,7 @@ Window {
         anchors.left: parent.left
         anchors.top: topBar.bottom
         anchors.bottom: parent.bottom
+        visible: window.showSidebar
         theme: window.theme
     }
 
@@ -36,13 +41,14 @@ Window {
         anchors.topMargin: window.theme.gap
         anchors.bottom: parent.bottom
         anchors.bottomMargin: window.theme.gap
+        visible: window.showRightRail
         theme: window.theme
     }
 
     CentrePanel {
-        anchors.left: sidebar.right
+        anchors.left: window.showSidebar ? sidebar.right : parent.left
         anchors.leftMargin: window.theme.gap
-        anchors.right: rightRail.left
+        anchors.right: window.showRightRail ? rightRail.left : parent.right
         anchors.rightMargin: window.theme.gap
         anchors.top: topBar.bottom
         anchors.topMargin: window.theme.gap
