@@ -741,6 +741,56 @@ int richNoteEditIsSafe()
                    && !model.dayNoteError().isEmpty(),
                QStringLiteral("formatted Day note was not marked read-only")))
         return 1;
+    const QString noteError = model.dayNoteError();
+    int taskErrorChanges = 0;
+    QObject::connect(&model, &TodayModel::taskErrorChanged,
+                     [&taskErrorChanges] { ++taskErrorChanges; });
+    QSqlQuery query(database.connection());
+    if (!query.exec(QStringLiteral(
+            "CREATE TRIGGER reject_task_insert BEFORE INSERT ON items "
+            "WHEN NEW.kind = 'task' BEGIN SELECT RAISE(FAIL, 'task insert failed'); END")))
+        return fail(query.lastError().text());
+    if (!check(!model.addTask(QStringLiteral("Task"))
+                   && model.property("taskError").toString().contains(QStringLiteral("task insert failed"))
+                   && model.dayNoteError() == noteError && taskErrorChanges == 1,
+               QStringLiteral("task creation error did not preserve the note explanation")))
+        return 1;
+    if (!query.exec(QStringLiteral("DROP TRIGGER reject_task_insert")))
+        return fail(query.lastError().text());
+    if (!check(model.addTask(QStringLiteral("Task")) && model.taskError().isEmpty()
+                   && model.dayNoteError() == noteError && taskErrorChanges == 2,
+               QStringLiteral("successful task creation did not clear its error")))
+        return 1;
+    const QString taskId = model.lines().first().toMap().value("id").toString();
+    if (!query.exec(QStringLiteral(
+            "CREATE TRIGGER reject_task_update BEFORE UPDATE ON items "
+            "WHEN NEW.kind = 'task' BEGIN SELECT RAISE(FAIL, 'task update failed'); END")))
+        return fail(query.lastError().text());
+    if (!check(!model.setTaskCompleted(taskId, true)
+                   && model.taskError().contains(QStringLiteral("task update failed"))
+                   && model.dayNoteError() == noteError,
+               QStringLiteral("task update error did not preserve the note explanation")))
+        return 1;
+    if (!query.exec(QStringLiteral("DROP TRIGGER reject_task_update")))
+        return fail(query.lastError().text());
+    if (!check(model.setTaskCompleted(taskId, false) && model.taskError().isEmpty()
+                   && model.dayNoteError() == noteError,
+               QStringLiteral("unchanged task completion did not clear its error")))
+        return 1;
+    if (!query.exec(QStringLiteral(
+            "CREATE TRIGGER reject_task_update BEFORE UPDATE ON items "
+            "WHEN NEW.kind = 'task' BEGIN SELECT RAISE(FAIL, 'task update failed'); END")))
+        return fail(query.lastError().text());
+    if (!model.setTaskCompleted(taskId, true) && !model.taskError().isEmpty()) {
+        if (!query.exec(QStringLiteral("DROP TRIGGER reject_task_update")))
+            return fail(query.lastError().text());
+    } else {
+        return fail(QStringLiteral("task update failure fixture did not fail"));
+    }
+    if (!check(model.setTaskCompleted(taskId, true) && model.taskError().isEmpty()
+                   && model.dayNoteError() == noteError,
+               QStringLiteral("successful task completion did not clear its error")))
+        return 1;
     model.setDayNoteText(QStringLiteral("Changed"));
     model.selectDate(QDate::currentDate().addDays(1).toString(Qt::ISODate));
     const auto after = blocks.readById(stored->id);

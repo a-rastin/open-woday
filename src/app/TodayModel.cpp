@@ -218,6 +218,11 @@ QString TodayModel::dayNoteError() const
     return m_dayNoteError;
 }
 
+QString TodayModel::taskError() const
+{
+    return m_taskError;
+}
+
 QString TodayModel::refreshError() const
 {
     return m_refreshError;
@@ -239,9 +244,10 @@ bool TodayModel::addTask(const QString& title)
     item.duePrecision = QStringLiteral("day");
     ItemRepository items(m_database);
     if (!items.create(item)) {
-        setDayNoteError(items.lastError());
+        setTaskError(items.lastError());
         return false;
     }
+    setTaskError({});
     refreshLinesAndSummary();
     return true;
 }
@@ -257,10 +263,11 @@ bool TodayModel::setTaskCompleted(const QString& id, bool completed)
     if (!stored || stored->kind != kTaskKind || !stored->dueAt
         || stored->dueAt->left(10) != selectedDate()) {
         if (!items.lastError().isEmpty())
-            setDayNoteError(items.lastError());
+            setTaskError(items.lastError());
         return false;
     }
     if (stored->completedAt.has_value() == completed) {
+        setTaskError({});
         refreshLinesAndSummary();
         return true;
     }
@@ -269,9 +276,10 @@ bool TodayModel::setTaskCompleted(const QString& id, bool completed)
     updated.completedAt = completed ? std::optional<QString>(now) : std::nullopt;
     updated.modifiedAt = now;
     if (!items.update(updated)) {
-        setDayNoteError(items.lastError());
+        setTaskError(items.lastError());
         return false;
     }
+    setTaskError({});
     refreshLinesAndSummary();
     return true;
 }
@@ -281,6 +289,14 @@ void TodayModel::setDayNoteError(const QString& error)
     if (m_dayNoteError != error) {
         m_dayNoteError = error;
         emit dayNoteErrorChanged();
+    }
+}
+
+void TodayModel::setTaskError(const QString& error)
+{
+    if (m_taskError != error) {
+        m_taskError = error;
+        emit taskErrorChanged();
     }
 }
 

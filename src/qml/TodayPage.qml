@@ -195,6 +195,15 @@ Item {
         Text {
             width: parent.width
             visible: text.length > 0
+            text: todayModel.taskError
+            color: page.theme.accent
+            font.family: page.theme.font
+            font.pixelSize: page.theme.bodySize
+            wrapMode: Text.Wrap
+        }
+        Text {
+            width: parent.width
+            visible: text.length > 0
             text: todayModel.dayNoteError
             color: page.theme.accent
             font.family: page.theme.font

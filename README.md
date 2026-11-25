@@ -153,6 +153,9 @@ Prerequisites (checked on the maintainer's machine 2026-11-23):
 - Qt **6.12** with `Qt6Quick`, `Qt6Widgets`, `Qt6Core` and the **SQL / SQLite
   driver** module (headers in `/usr/include/qt6`)
 - `qmake6` and `g++`. **CMake is not used and should not be added.**
+- For the mandatory tests, SQLite's C development headers and linker library
+  (for example, `libsqlite3-dev` on Debian/Ubuntu or `sqlite-devel` on Fedora).
+  These are separate from the Qt SQLite driver.
 
 ```bash
 qmake6 open-woday.pro && make
@@ -176,8 +179,10 @@ and build details.
 
 ## Testing
 
-Tests run locally on the machine with the Qt 6 SQL/SQLite toolchain installed;
-no Google account, remote runtime or GPU is required.
+Tests run locally with the Qt 6 SQL/SQLite toolchain and SQLite C development
+package listed in [Build from source](#build-from-source) installed. The test
+uses `sqlite3.h` and links against `libsqlite3`; no Google account, remote runtime
+or GPU is required.
 
 From the repository root:
 
