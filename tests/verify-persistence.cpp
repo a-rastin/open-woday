@@ -72,6 +72,101 @@ int freshAppData(QTemporaryDir* dataDir)
 
 } // namespace
 
+// Exercise the Phase 4 restart path as one scenario, including date changes
+// and an Event created through the existing store API.
+int todayDataSurvivesRestartTogether()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    const QString today = QDate::currentDate().toString(Qt::ISODate);
+    const QString tomorrow = QDate::currentDate().addDays(1).toString(Qt::ISODate);
+    const QString writing = QString::fromUtf8("Plan ahead\n\nسلام");
+    qlonglong noteId = 0;
+    qlonglong eventId = 0;
+    QString taskId;
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+        ItemRepository items(database);
+        Item event;
+        event.kind = QStringLiteral("event");
+        event.title = QStringLiteral("Design review");
+        event.startAt = today + QStringLiteral("T10:00:00");
+        event.endAt = today + QStringLiteral("T11:00:00");
+        const auto createdEvent = items.create(event);
+        if (!createdEvent)
+            return fail(items.lastError());
+        eventId = createdEvent->id;
+
+        TodayModel model(database);
+        model.setDayNoteText(writing);
+        model.addTask(QStringLiteral("Pack lunch"));
+        if (!check(!model.lines().isEmpty(), QStringLiteral("Task line missing")))
+            return 1;
+        taskId = model.lines().first().toMap().value(QStringLiteral("id")).toString();
+        if (!check(model.setTaskCompleted(taskId, true),
+                   QStringLiteral("Task could not be completed")))
+            return 1;
+        const auto notes = items.readByDay(today);
+        if (!check(notes.size() == 1 && notes.first().kind == QStringLiteral("note"),
+                   QStringLiteral("opening today did not create one Day note")))
+            return 1;
+        noteId = notes.first().id;
+        model.selectDate(tomorrow);
+        if (!check(items.readByDay(tomorrow).size() == 1 && model.dayNoteText().isEmpty(),
+                   QStringLiteral("opening another date did not create its Day note")))
+            return 1;
+        model.selectDate(today);
+        if (!check(model.dayNoteText() == writing && items.readByDay(today).size() == 1
+                       && items.readByDay(today).first().id == noteId,
+                   QStringLiteral("reopening today did not reuse its Day note")))
+            return 1;
+    }
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+        TodayModel model(database);
+        ItemRepository items(database);
+        BlockRepository blocks(database);
+        const auto notes = items.readByDay(today);
+        const auto event = items.readById(eventId);
+        const auto task = items.readById(taskId.toLongLong());
+        const auto storedBlocks = blocks.readByItem(noteId);
+        if (!check(notes.size() == 1 && notes.first().id == noteId
+                       && model.dayNoteText() == writing
+                       && storedBlocks.size() == 3
+                       && storedBlocks.at(0).content == QStringLiteral("Plan ahead")
+                       && storedBlocks.at(1).content.isEmpty()
+                       && storedBlocks.at(2).content == QString::fromUtf8("سلام")
+                       && storedBlocks.at(2).position == 2,
+                   QStringLiteral("Day note or ordered writing changed after restart")))
+            return 1;
+        bool completedTaskVisible = false;
+        for (const QVariant& line : model.lines()) {
+            const QVariantMap values = line.toMap();
+            if (values.value(QStringLiteral("id")).toString() == taskId
+                && values.value(QStringLiteral("title")) == QStringLiteral("Pack lunch")
+                && values.value(QStringLiteral("completed")).toBool())
+                completedTaskVisible = true;
+        }
+        if (!check(task && task->completedAt && completedTaskVisible
+                       && event && event->title == QStringLiteral("Design review")
+                       && event->startAt == today + QStringLiteral("T10:00:00")
+                       && event->endAt == today + QStringLiteral("T11:00:00")
+                       && model.summary() == QStringLiteral("1 task and 1 event on this day"),
+                   QStringLiteral("Task, Event or summary changed after restart")))
+            return 1;
+        model.selectDate(tomorrow);
+        if (!check(items.readByDay(tomorrow).size() == 1 && model.dayNoteText().isEmpty(),
+                   QStringLiteral("the other Day note was not reused after restart")))
+            return 1;
+    }
+    return 0;
+}
+
 int todayTaskWriteSurvivesRestart()
 {
     QTemporaryDir dataDir;
@@ -3266,6 +3361,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    if (todayDataSurvivesRestartTogether() != 0) {
+        return 1;
+    }
     if (todayTaskWriteSurvivesRestart() != 0) {
         return 1;
     }
