@@ -130,6 +130,29 @@ bool hasRoundedCorners(const QImage &image, const QRect &bounds, int radius)
         && isColor(image, right - radius, bottom - radius, panel);
 }
 
+QImage grabWindowAtSize(QQuickWindow *window, const QSize &size,
+                        bool &frameSwapped)
+{
+    window->resize(size);
+    QCoreApplication::processEvents();
+
+    QEventLoop frameLoop;
+    frameSwapped = false;
+    const auto frameConnection = QObject::connect(
+        window, &QQuickWindow::frameSwapped, &frameLoop,
+        [&] {
+            frameSwapped = true;
+            frameLoop.quit();
+        });
+    QTimer::singleShot(1000, &frameLoop, &QEventLoop::quit);
+    window->update();
+    frameLoop.exec();
+    QObject::disconnect(frameConnection);
+    QCoreApplication::processEvents();
+
+    return window->grabWindow();
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -294,6 +317,111 @@ int main(int argc, char *argv[])
                                 railBottom - railTop - 2 * radius - 1);
     check(isCleanPanel(image, cleanRailBounds),
           "the RightRail contains no Item content or placeholder");
+
+    bool sidebarFoldFrameSwapped = false;
+    const QImage sidebarFoldImage = grabWindowAtSize(
+        window, QSize(700, 600), sidebarFoldFrameSwapped);
+    check(sidebarFoldFrameSwapped,
+           "narrowing the window completes another rendered frame");
+    check(sidebarFoldImage.size() == QSize(700, 600),
+           "the window renders at the Sidebar-fold size");
+
+    const std::vector<PanelRun> sidebarFoldRuns =
+        findPanelRuns(sidebarFoldImage, sidebarFoldImage.height() / 2, true);
+    check(sidebarFoldRuns.size() == 2,
+           "the RightRail stays visible when the Sidebar folds");
+    check(isColor(sidebarFoldImage, 10, sidebarFoldImage.height() / 2,
+                  canvas),
+           "the Sidebar folds before the RightRail");
+    check(isColor(sidebarFoldImage, 10, 10, sidebar)
+              && isColor(sidebarFoldImage, sidebarFoldImage.width() - 11,
+                         10, sidebar),
+           "the TopBar spans the frame after the Sidebar folds");
+    if (sidebarFoldRuns.size() == 2) {
+        const PanelRun foldedCentre = sidebarFoldRuns.at(0);
+        const PanelRun foldedRightRail = sidebarFoldRuns.at(1);
+        check(foldedCentre.start == gap,
+               "the centre panel reclaims the folded Sidebar space");
+        check(foldedRightRail.end + gap == sidebarFoldImage.width() - 1,
+               "the RightRail keeps its shared inset after the Sidebar folds");
+        check(foldedCentre.end - foldedCentre.start + 1
+                  > foldedRightRail.end - foldedRightRail.start + 1,
+               "the centre panel remains wider than the RightRail");
+    }
+
+    bool widenedFrameSwapped = false;
+    const QImage widenedImage = grabWindowAtSize(
+        window, QSize(800, 600), widenedFrameSwapped);
+    check(widenedFrameSwapped,
+           "widening the window completes another rendered frame");
+    check(widenedImage.size() == QSize(800, 600),
+           "the window renders again at the normal launch size");
+    const std::vector<PanelRun> widenedRuns =
+        findPanelRuns(widenedImage, widenedImage.height() / 2, true);
+    check(widenedRuns.size() == 2,
+           "widening restores the RightRail alongside the centre panel");
+    check(isColor(widenedImage, 10, widenedImage.height() / 2, sidebar),
+           "widening restores the Sidebar after it folded first");
+    check(isColor(widenedImage, 10, 10, sidebar)
+              && isColor(widenedImage, widenedImage.width() - 11, 10,
+                         sidebar),
+           "the TopBar still spans the restored frame");
+    if (widenedRuns.size() == 2) {
+        check(widenedRuns.at(0).start > gap
+                  && widenedRuns.at(1).end + gap == widenedImage.width() - 1,
+               "the restored panels return to their original inset");
+    }
+
+    bool rightRailFoldFrameSwapped = false;
+    const QImage rightRailFoldImage = grabWindowAtSize(
+        window, QSize(520, 600), rightRailFoldFrameSwapped);
+    check(rightRailFoldFrameSwapped,
+           "narrowing past the RightRail threshold renders another frame");
+    check(rightRailFoldImage.size() == QSize(520, 600),
+           "the window renders at the RightRail-fold size");
+
+    const std::vector<PanelRun> rightRailFoldRuns =
+        findPanelRuns(rightRailFoldImage, rightRailFoldImage.height() / 2,
+                      true);
+    check(rightRailFoldRuns.size() == 1,
+           "the RightRail folds after the Sidebar");
+    check(isColor(rightRailFoldImage, 10, rightRailFoldImage.height() / 2,
+                  canvas)
+              && isColor(rightRailFoldImage,
+                         rightRailFoldImage.width() - 11,
+                         rightRailFoldImage.height() / 2, canvas),
+           "both side panels are absent at the narrowest stage");
+    check(isColor(rightRailFoldImage, 10, 10, sidebar)
+              && isColor(rightRailFoldImage,
+                         rightRailFoldImage.width() - 11, 10, sidebar),
+           "the TopBar spans the frame after the RightRail folds");
+    if (rightRailFoldRuns.size() == 1) {
+        const PanelRun narrowCentre = rightRailFoldRuns.at(0);
+        check(narrowCentre.start == gap
+                  && narrowCentre.end + gap == rightRailFoldImage.width() - 1,
+               "the centre panel reclaims both folded-panel spaces");
+        check(narrowCentre.end - narrowCentre.start + 1
+                  >= rightRailFoldImage.width() - 2 * gap,
+               "the centre panel keeps the shared inset without overlap");
+    }
+
+    bool rightRailRestoredFrameSwapped = false;
+    const QImage rightRailRestoredImage = grabWindowAtSize(
+        window, QSize(700, 600), rightRailRestoredFrameSwapped);
+    check(rightRailRestoredFrameSwapped,
+           "widening to the Sidebar-fold stage renders another frame");
+    const std::vector<PanelRun> rightRailRestoredRuns =
+        findPanelRuns(rightRailRestoredImage,
+                      rightRailRestoredImage.height() / 2, true);
+    check(rightRailRestoredRuns.size() == 2,
+           "widening restores the RightRail before the Sidebar");
+    check(isColor(rightRailRestoredImage, 10,
+                  rightRailRestoredImage.height() / 2, canvas),
+           "the Sidebar remains folded while the RightRail returns");
+    check(isColor(rightRailRestoredImage, 10, 10, sidebar)
+              && isColor(rightRailRestoredImage,
+                         rightRailRestoredImage.width() - 11, 10, sidebar),
+           "the TopBar spans the frame as the RightRail returns");
 
     if (failures != 0) {
         std::fprintf(stderr, "%d app-shell appearance check(s) failed\n",
