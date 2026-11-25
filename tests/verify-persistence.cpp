@@ -19,6 +19,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QSqlDatabase>
+#include <QSqlDriver>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QString>
@@ -28,6 +29,7 @@
 
 #include <cstdio>
 #include <optional>
+#include <sqlite3.h>
 
 #include "store/Database.h"
 #include "store/BlockRepository.h"
@@ -290,6 +292,66 @@ int todayCompletionRefreshesAlreadyStoredState()
                    && model.lines().first().toMap().value("completed").toBool(),
                QStringLiteral("already-stored completion was not reflected in the line")))
         return 1;
+    return 0;
+}
+
+// Deny a particular SELECT after the task lookup, simulating either failed
+// repository read without disrupting the preceding successful write/lookup.
+int denySelectedRead(void* context, int action, const char*, const char*,
+                     const char*, const char*)
+{
+    int* remaining = static_cast<int*>(context);
+    if (action == SQLITE_SELECT && --*remaining == 0)
+        return SQLITE_DENY;
+    return SQLITE_OK;
+}
+
+int todayRefreshRetainsStateOnReadFailure()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    Database database;
+    if (!database.open())
+        return fail(database.lastError());
+    ItemRepository items(database);
+    Item event;
+    event.kind = QStringLiteral("event");
+    event.title = QStringLiteral("Existing event");
+    event.startAt = QDate::currentDate().toString(Qt::ISODate) + QStringLiteral("T10:00:00");
+    if (!items.create(event))
+        return fail(items.lastError());
+    TodayModel model(database);
+    if (!model.addTask(QStringLiteral("Existing task")))
+        return fail(QStringLiteral("could not create fixture Task"));
+    const QVariantList original = model.lines();
+    const QString id = original.first().toMap().value("id").toString();
+    const QString summary = model.summary();
+    if (!check(original.size() == 2 && model.taskCount() == 1 && model.eventCount() == 1,
+               QStringLiteral("Task and Event fixture missing")))
+        return 1;
+    QVariant handle = database.connection().driver()->handle();
+    if (!check(handle.isValid() && qstrcmp(handle.typeName(), "sqlite3*") == 0,
+               QStringLiteral("SQLite handle unavailable")))
+        return 1;
+    sqlite3* sqlite = *static_cast<sqlite3**>(handle.data());
+    for (int read = 2; read <= 3; ++read) {
+        int remaining = read;
+        sqlite3_set_authorizer(sqlite, denySelectedRead, &remaining);
+        model.setTaskCompleted(id, false);
+        sqlite3_set_authorizer(sqlite, nullptr, nullptr);
+        if (!check(remaining == 0 && model.lines() == original
+                       && model.summary() == summary
+                       && model.taskCount() == 1 && model.eventCount() == 1
+                       && !model.property("refreshError").toString().isEmpty(),
+                   QStringLiteral("failed Item read replaced state or hid its error")))
+            return 1;
+        model.setTaskCompleted(id, false);
+        if (!check(model.property("refreshError").toString().isEmpty()
+                       && model.lines() == original,
+                   QStringLiteral("successful refresh did not clear its error")))
+            return 1;
+    }
     return 0;
 }
 
@@ -3384,6 +3446,9 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (todayCompletionRefreshesAlreadyStoredState() != 0) {
+        return 1;
+    }
+    if (todayRefreshRetainsStateOnReadFailure() != 0) {
         return 1;
     }
     if (richNoteEditIsSafe() != 0) {

@@ -4,6 +4,7 @@
 TEMPLATE = app
 TARGET = verify-persistence
 QT = core sql
+LIBS += -lsqlite3
 CONFIG += c++17 console
 CONFIG -= app_bundle
 

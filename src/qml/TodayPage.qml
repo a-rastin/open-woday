@@ -136,7 +136,7 @@ Item {
         anchors.topMargin: page.theme.gap
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.bottom: errorText.top
+        anchors.bottom: errors.top
         contentWidth: width
         contentHeight: Math.max(height, editor.implicitHeight)
         clip: true
@@ -160,16 +160,30 @@ Item {
         }
     }
 
-    Text {
-        id: errorText
+    Column {
+        id: errors
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        visible: text.length > 0
-        text: todayModel.dayNoteError
-        color: page.theme.accent
-        font.family: page.theme.font
-        font.pixelSize: page.theme.bodySize
-        wrapMode: Text.Wrap
+        Text {
+            width: parent.width
+            visible: text.length > 0
+            text: todayModel.refreshError.length > 0
+                  ? qsTr("Could not refresh Tasks and Events; showing the last available results: %1").arg(todayModel.refreshError)
+                  : ""
+            color: page.theme.accent
+            font.family: page.theme.font
+            font.pixelSize: page.theme.bodySize
+            wrapMode: Text.Wrap
+        }
+        Text {
+            width: parent.width
+            visible: text.length > 0
+            text: todayModel.dayNoteError
+            color: page.theme.accent
+            font.family: page.theme.font
+            font.pixelSize: page.theme.bodySize
+            wrapMode: Text.Wrap
+        }
     }
 }

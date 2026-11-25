@@ -129,6 +129,11 @@ QString TodayModel::dayNoteError() const
     return m_dayNoteError;
 }
 
+QString TodayModel::refreshError() const
+{
+    return m_refreshError;
+}
+
 QVariantList TodayModel::lines() const
 {
     return m_lines;
@@ -187,6 +192,14 @@ void TodayModel::setDayNoteError(const QString& error)
     if (m_dayNoteError != error) {
         m_dayNoteError = error;
         emit dayNoteErrorChanged();
+    }
+}
+
+void TodayModel::setRefreshError(const QString& error)
+{
+    if (m_refreshError != error) {
+        m_refreshError = error;
+        emit refreshErrorChanged();
     }
 }
 
@@ -298,7 +311,8 @@ void TodayModel::refreshLinesAndSummary()
     QVariantList lines;
     const QList<Item> taskItems = items.readByKind(kTaskKind);
     if (!items.lastError().isEmpty()) {
-        qWarning("TodayModel: %s", qPrintable(items.lastError()));
+        setRefreshError(items.lastError());
+        return;
     }
     for (const Item& item : taskItems) {
         if (item.dueAt && item.dueAt->left(10) == selectedDate()) {
@@ -313,7 +327,8 @@ void TodayModel::refreshLinesAndSummary()
     }
     const QList<Item> eventItems = items.readByKind(kEventKind);
     if (!items.lastError().isEmpty()) {
-        qWarning("TodayModel: %s", qPrintable(items.lastError()));
+        setRefreshError(items.lastError());
+        return;
     }
     for (const Item& item : eventItems) {
         if (item.startAt && item.startAt->left(10) == selectedDate()) {
@@ -329,6 +344,7 @@ void TodayModel::refreshLinesAndSummary()
     m_taskCount = tasks;
     m_eventCount = events;
     m_lines = lines;
+    setRefreshError({});
     emit linesChanged();
     emit summaryChanged();
 }
