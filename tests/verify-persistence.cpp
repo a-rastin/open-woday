@@ -102,6 +102,125 @@ int todayTaskWriteSurvivesRestart()
     return 0;
 }
 
+int todayCompletionSurvivesRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    QString id;
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+        TodayModel model(database);
+        model.addTask(QStringLiteral("Pack lunch"));
+        if (!check(model.lines().size() == 1 && model.taskCount() == 1,
+                   QStringLiteral("the selected day did not show its Task")))
+            return 1;
+        id = model.lines().first().toMap().value("id").toString();
+        if (!check(model.setTaskCompleted(id, true)
+                       && model.lines().first().toMap().value("completed").toBool()
+                       && model.summary() == QStringLiteral("1 task and 0 events on this day"),
+                   QStringLiteral("completion or summary did not update")))
+            return 1;
+        model.selectDate(QDate::currentDate().addDays(1).toString(Qt::ISODate));
+        if (!check(model.lines().isEmpty() && model.taskCount() == 0
+                       && !model.setTaskCompleted(id, false),
+                   QStringLiteral("another day's Task was exposed or changed")))
+            return 1;
+    }
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+        TodayModel model(database);
+        ItemRepository items(database);
+        const auto stored = items.readById(id.toLongLong());
+        if (!check(stored && stored->completedAt
+                       && QDateTime::fromString(*stored->completedAt, Qt::ISODate).isValid()
+                       && model.lines().size() == 1
+                       && model.lines().first().toMap().value("completed").toBool(),
+                   QStringLiteral("Task completion did not survive restart")))
+            return 1;
+        if (!check(model.setTaskCompleted(id, false)
+                       && !model.lines().first().toMap().value("completed").toBool(),
+                   QStringLiteral("Task completion could not be cleared")))
+            return 1;
+    }
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+        ItemRepository items(database);
+        const auto stored = items.readById(id.toLongLong());
+        if (!check(stored && !stored->completedAt,
+                   QStringLiteral("cleared completion did not survive restart")))
+            return 1;
+    }
+    return 0;
+}
+
+int todayCompletionRefreshesAlreadyStoredState()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    Database database;
+    if (!database.open())
+        return fail(database.lastError());
+    TodayModel model(database);
+    model.addTask(QStringLiteral("Pack lunch"));
+    const QString id = model.lines().first().toMap().value("id").toString();
+    ItemRepository items(database);
+    auto task = items.readById(id.toLongLong());
+    if (!task)
+        return fail(items.lastError());
+    task->completedAt = QStringLiteral("2026-11-25T10:00:00Z");
+    if (!items.update(*task))
+        return fail(items.lastError());
+    if (!check(model.setTaskCompleted(id, true)
+                   && model.lines().first().toMap().value("completed").toBool(),
+               QStringLiteral("already-stored completion was not reflected in the line")))
+        return 1;
+    return 0;
+}
+
+int richNoteEditIsSafe()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    Database database;
+    if (!database.open())
+        return fail(database.lastError());
+    ItemRepository items(database);
+    Item note;
+    note.kind = QStringLiteral("note");
+    note.day = QDate::currentDate().toString(Qt::ISODate);
+    const auto storedNote = items.create(note);
+    if (!storedNote)
+        return fail(items.lastError());
+    BlockRepository blocks(database);
+    Block heading;
+    heading.itemId = storedNote->id;
+    heading.type = QStringLiteral("heading");
+    heading.content = QStringLiteral("Original");
+    const auto stored = blocks.create(heading);
+    if (!stored)
+        return fail(blocks.lastError());
+    TodayModel model(database);
+    model.setDayNoteText(QStringLiteral("Changed"));
+    model.selectDate(QDate::currentDate().addDays(1).toString(Qt::ISODate));
+    const auto after = blocks.readById(stored->id);
+    if (!check(after && after->type == heading.type && after->content == heading.content
+                   && model.selectedDate() == *note.day
+                   && model.dayNoteText() == QStringLiteral("Changed")
+                   && !model.dayNoteError().isEmpty(),
+               QStringLiteral("rich note or failed edit was lost")))
+        return 1;
+    return 0;
+}
+
 int dayNoteWritingSurvivesRestart()
 {
     QTemporaryDir dataDir;
@@ -3148,6 +3267,15 @@ int main(int argc, char* argv[])
     }
 
     if (todayTaskWriteSurvivesRestart() != 0) {
+        return 1;
+    }
+    if (todayCompletionSurvivesRestart() != 0) {
+        return 1;
+    }
+    if (todayCompletionRefreshesAlreadyStoredState() != 0) {
+        return 1;
+    }
+    if (richNoteEditIsSafe() != 0) {
         return 1;
     }
     if (dayNoteWritingSurvivesRestart() != 0) {

@@ -63,6 +63,7 @@ public:
     QString dayNoteError() const;
     QVariantList lines() const;
     Q_INVOKABLE void addTask(const QString& title);
+    Q_INVOKABLE bool setTaskCompleted(const QString& id, bool completed);
     Q_INVOKABLE void setDayNoteText(const QString& text);
 
     // Select one of the Day strip's dates. Dates outside the strip are ignored,
@@ -77,7 +78,7 @@ signals:
     void linesChanged();
 
 private:
-    void refreshSummary();
+    void refreshLinesAndSummary();
     bool loadDayNote(const QString& date);
     void setDayNoteError(const QString& error);
 
@@ -85,12 +86,13 @@ private:
     QDate m_today;
     QList<QDate> m_days;
     QDate m_selected;
-    QString m_selectedDate;
     int m_taskCount = 0;
     int m_eventCount = 0;
     qlonglong m_dayNoteId = 0;
     QString m_dayNoteText;
+    QString m_savedNoteText;
     QString m_dayNoteError;
+    bool m_dayNoteDirty = false;
     QVariantList m_lines;
 };
 

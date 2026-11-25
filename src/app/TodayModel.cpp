@@ -5,6 +5,7 @@
 #include "store/ItemRepository.h"
 
 #include <QLocale>
+#include <QDateTime>
 
 namespace {
 
@@ -28,15 +29,14 @@ TodayModel::TodayModel(Database& database, QObject* parent)
     : QAbstractListModel(parent),
       m_database(database),
       m_today(QDate::currentDate()),
-      m_selected(m_today),
-      m_selectedDate(isoDate(m_today))
+      m_selected(m_today)
 {
     m_days.reserve(kDayStripSize);
     for (int i = 0; i < kDayStripSize; ++i) {
         m_days.append(m_today.addDays(i - kDaysBeforeToday));
     }
-    refreshSummary();
-    loadDayNote(m_selectedDate);
+    refreshLinesAndSummary();
+    loadDayNote(selectedDate());
 }
 
 int TodayModel::rowCount(const QModelIndex& parent) const
@@ -66,7 +66,7 @@ QVariant TodayModel::data(const QModelIndex& index, int role) const
     case IsTodayRole:
         return date == m_today;
     case IsSelectedRole:
-        return isoDate(date) == m_selectedDate;
+        return date == m_selected;
     default:
         return {};
     }
@@ -85,7 +85,7 @@ QHash<int, QByteArray> TodayModel::roleNames() const
 
 QString TodayModel::selectedDate() const
 {
-    return m_selectedDate;
+    return isoDate(m_selected);
 }
 
 QString TodayModel::selectedDateLabel() const
@@ -141,14 +141,44 @@ void TodayModel::addTask(const QString& title)
     Item item;
     item.kind = kTaskKind;
     item.title = title.trimmed();
-    item.dueAt = m_selectedDate;
+    item.dueAt = selectedDate();
     item.duePrecision = QStringLiteral("day");
     ItemRepository items(m_database);
     if (!items.create(item)) {
         setDayNoteError(items.lastError());
         return;
     }
-    refreshSummary();
+    refreshLinesAndSummary();
+}
+
+bool TodayModel::setTaskCompleted(const QString& id, bool completed)
+{
+    bool valid = false;
+    const qlonglong itemId = id.toLongLong(&valid);
+    if (!valid)
+        return false;
+    ItemRepository items(m_database);
+    const auto stored = items.readById(itemId);
+    if (!stored || stored->kind != kTaskKind || !stored->dueAt
+        || stored->dueAt->left(10) != selectedDate()) {
+        if (!items.lastError().isEmpty())
+            setDayNoteError(items.lastError());
+        return false;
+    }
+    if (stored->completedAt.has_value() == completed) {
+        refreshLinesAndSummary();
+        return true;
+    }
+    Item updated = *stored;
+    const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    updated.completedAt = completed ? std::optional<QString>(now) : std::nullopt;
+    updated.modifiedAt = now;
+    if (!items.update(updated)) {
+        setDayNoteError(items.lastError());
+        return false;
+    }
+    refreshLinesAndSummary();
+    return true;
 }
 
 void TodayModel::setDayNoteError(const QString& error)
@@ -197,6 +227,8 @@ bool TodayModel::loadDayNote(const QString& date)
     }
     m_dayNoteId = id;
     m_dayNoteText = lines.join(QLatin1Char('\n'));
+    m_savedNoteText = m_dayNoteText;
+    m_dayNoteDirty = false;
     setDayNoteError({});
     emit dayNoteTextChanged();
     return true;
@@ -204,15 +236,24 @@ bool TodayModel::loadDayNote(const QString& date)
 
 void TodayModel::setDayNoteText(const QString& text)
 {
-    if (!m_dayNoteId || text == m_dayNoteText) {
+    if (!m_dayNoteId || (text == m_dayNoteText && !m_dayNoteDirty)) {
         return;
     }
+    m_dayNoteText = text;
+    if (text == m_savedNoteText) {
+        m_dayNoteDirty = false;
+        setDayNoteError({});
+        emit dayNoteTextChanged();
+        return;
+    }
+    m_dayNoteDirty = true;
     BlockRepository blocks(m_database);
     if (!blocks.replaceText(m_dayNoteId, text)) {
         setDayNoteError(blocks.lastError());
         return;
     }
-    m_dayNoteText = text;
+    m_dayNoteDirty = false;
+    m_savedNoteText = text;
     setDayNoteError({});
     emit dayNoteTextChanged();
 }
@@ -225,24 +266,28 @@ void TodayModel::selectDate(const QString& date)
     }
 
     const QString normalized = isoDate(parsed);
-    if (normalized == m_selectedDate) {
+    if (parsed == m_selected) {
         return;
     }
 
+    if (m_dayNoteDirty) {
+        setDayNoteText(m_dayNoteText);
+        if (m_dayNoteDirty)
+            return;
+    }
     if (!loadDayNote(normalized)) {
         return;
     }
     m_selected = parsed;
-    m_selectedDate = normalized;
     emit selectedDateChanged();
     if (!m_days.isEmpty()) {
         emit dataChanged(index(0), index(m_days.size() - 1),
                          QList<int>{ IsSelectedRole });
     }
-    refreshSummary();
+    refreshLinesAndSummary();
 }
 
-void TodayModel::refreshSummary()
+void TodayModel::refreshLinesAndSummary()
 {
     // The store is the single source of truth: normal reads exclude
     // soft-deleted Items, so the counts describe the selected day's live Items.
@@ -255,9 +300,13 @@ void TodayModel::refreshSummary()
         qWarning("TodayModel: %s", qPrintable(items.lastError()));
     }
     for (const Item& item : taskItems) {
-        if (item.dueAt && item.dueAt->left(10) == m_selectedDate) {
+        if (item.dueAt && item.dueAt->left(10) == selectedDate()) {
             ++tasks;
-            lines.append(QVariantMap{{QStringLiteral("title"), item.title}});
+            lines.append(QVariantMap{
+                {QStringLiteral("id"), QString::number(item.id)},
+                {QStringLiteral("title"), item.title},
+                {QStringLiteral("completed"), item.completedAt.has_value()},
+            });
         }
     }
     const QList<Item> eventItems = items.readByKind(kEventKind);
@@ -265,7 +314,7 @@ void TodayModel::refreshSummary()
         qWarning("TodayModel: %s", qPrintable(items.lastError()));
     }
     for (const Item& item : eventItems) {
-        if (item.startAt && item.startAt->left(10) == m_selectedDate) {
+        if (item.startAt && item.startAt->left(10) == selectedDate()) {
             ++events;
         }
     }

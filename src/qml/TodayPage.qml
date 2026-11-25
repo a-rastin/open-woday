@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 
 Item {
     id: page
@@ -43,9 +44,55 @@ Item {
         }
     }
 
+    Column {
+        id: taskLines
+        anchors.top: heading.bottom
+        anchors.topMargin: page.theme.gap
+        width: parent.width
+        Repeater {
+            model: todayModel.lines
+            delegate: CheckBox {
+                required property var modelData
+                width: taskLines.width
+                text: modelData.title
+                checked: modelData.completed
+                font.family: page.theme.font
+                font.pixelSize: page.theme.bodySize
+                // The stored Item controls the check state, including when a
+                // write fails; clicking must not break the checked binding.
+                nextCheckState: function() { return checkState }
+                onClicked: todayModel.setTaskCompleted(modelData.id, !modelData.completed)
+                indicator: Rectangle {
+                    x: 0
+                    y: (parent.height - height) / 2
+                    width: 18
+                    height: 18
+                    radius: page.theme.radiusControl / 2
+                    color: parent.checked ? page.theme.accent : page.theme.panel
+                    border.color: parent.checked ? page.theme.accent : page.theme.muted
+                    Text {
+                        anchors.centerIn: parent
+                        text: parent.parent.checked ? "✓" : ""
+                        color: page.theme.panel
+                        font.family: page.theme.font
+                        font.pixelSize: page.theme.bodySize
+                    }
+                }
+                contentItem: Text {
+                    leftPadding: 26
+                    text: parent.text
+                    color: page.theme.panelText
+                    font: parent.font
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+            }
+        }
+    }
+
     Flickable {
         id: writingArea
-        anchors.top: heading.bottom
+        anchors.top: taskLines.bottom
         anchors.topMargin: page.theme.gap
         anchors.left: parent.left
         anchors.right: parent.right
