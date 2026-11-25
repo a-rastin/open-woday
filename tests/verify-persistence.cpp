@@ -402,6 +402,67 @@ int todayTaskWriteSurvivesRestart()
     return 0;
 }
 
+int todayQueriesOnlySelectedDay()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    Database database;
+    if (!database.open())
+        return fail(database.lastError());
+    ItemRepository items(database);
+    const QString day = QDate::currentDate().toString(Qt::ISODate);
+    const QString next = QDate::currentDate().addDays(1).toString(Qt::ISODate);
+    auto create = [&](const QString& kind, const QString& date, int order,
+                      bool deleted = false) {
+        Item item;
+        item.kind = kind;
+        item.title = date;
+        item.sortOrder = order;
+        if (!date.isNull()) {
+            if (kind == QStringLiteral("task"))
+                item.dueAt = date;
+            else
+                item.startAt = date;
+        }
+        if (deleted)
+            item.deletedAt = QStringLiteral("2026-01-01T00:00:00Z");
+        return items.create(item);
+    };
+    const auto taskTime = create(QStringLiteral("task"), day + QStringLiteral("T23:59:59Z"), 2);
+    const auto taskDay = create(QStringLiteral("task"), day, 1);
+    const auto eventTime = create(QStringLiteral("event"), day + QStringLiteral("T00:00:00+02:00"), 2);
+    const auto eventDay = create(QStringLiteral("event"), day, 1);
+    if (!taskTime || !taskDay || !eventTime || !eventDay
+        || !create(QStringLiteral("task"), next, 0)
+        || !create(QStringLiteral("event"), next, 0)
+        || !create(QStringLiteral("task"), QString(), 0)
+        || !create(QStringLiteral("event"), QString(), 0)
+        || !create(QStringLiteral("task"), day, 0, true)
+        || !create(QStringLiteral("event"), day, 0, true))
+        return fail(items.lastError());
+    const QList<Item> tasks = items.readTasksDueOn(day);
+    const QList<Item> events = items.readEventsStartingOn(day);
+    if (!check(tasks.size() == 2 && tasks.at(0).id == taskDay->id
+                   && tasks.at(1).id == taskTime->id
+                   && events.size() == 2 && events.at(0).id == eventDay->id
+                   && events.at(1).id == eventTime->id,
+               QStringLiteral("day-scoped Item queries returned incorrect rows or order")))
+        return 1;
+    TodayModel model(database);
+    const QVariantList lines = model.lines();
+    if (!check(lines.size() == 4 && model.taskCount() == 2 && model.eventCount() == 2
+                   && lines.at(0).toMap().value("id").toString() == QString::number(taskDay->id)
+                   && lines.at(2).toMap().value("id").toString() == QString::number(eventDay->id),
+               QStringLiteral("Today did not display the selected day's Items in order")))
+        return 1;
+    model.selectDate(next);
+    if (!check(model.taskCount() == 1 && model.eventCount() == 1 && model.lines().size() == 2,
+               QStringLiteral("Today did not refresh for the newly selected day")))
+        return 1;
+    return 0;
+}
+
 int todayCompletionSurvivesRestart()
 {
     QTemporaryDir dataDir;
@@ -3683,6 +3744,9 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (todayTaskWriteSurvivesRestart() != 0) {
+        return 1;
+    }
+    if (todayQueriesOnlySelectedDay() != 0) {
         return 1;
     }
     if (todayCompletionSurvivesRestart() != 0) {

@@ -376,43 +376,35 @@ void TodayModel::refreshLinesAndSummary()
     // The store is the single source of truth: normal reads exclude
     // soft-deleted Items, so the counts describe the selected day's live Items.
     ItemRepository items(m_database);
-    int tasks = 0;
-    int events = 0;
     QVariantList lines;
-    const QList<Item> taskItems = items.readByKind(kTaskKind);
+    const QList<Item> taskItems = items.readTasksDueOn(selectedDate());
     if (!items.lastError().isEmpty()) {
         setRefreshError(items.lastError());
         return;
     }
     for (const Item& item : taskItems) {
-        if (item.dueAt && item.dueAt->left(10) == selectedDate()) {
-            ++tasks;
-            lines.append(QVariantMap{
-                {QStringLiteral("id"), QString::number(item.id)},
-                {QStringLiteral("kind"), kTaskKind},
-                {QStringLiteral("title"), item.title},
-                {QStringLiteral("completed"), item.completedAt.has_value()},
-            });
-        }
+        lines.append(QVariantMap{
+            {QStringLiteral("id"), QString::number(item.id)},
+            {QStringLiteral("kind"), kTaskKind},
+            {QStringLiteral("title"), item.title},
+            {QStringLiteral("completed"), item.completedAt.has_value()},
+        });
     }
-    const QList<Item> eventItems = items.readByKind(kEventKind);
+    const QList<Item> eventItems = items.readEventsStartingOn(selectedDate());
     if (!items.lastError().isEmpty()) {
         setRefreshError(items.lastError());
         return;
     }
     for (const Item& item : eventItems) {
-        if (item.startAt && item.startAt->left(10) == selectedDate()) {
-            ++events;
-            lines.append(QVariantMap{
-                {QStringLiteral("id"), QString::number(item.id)},
-                {QStringLiteral("kind"), kEventKind},
-                {QStringLiteral("title"), item.title},
-            });
-        }
+        lines.append(QVariantMap{
+            {QStringLiteral("id"), QString::number(item.id)},
+            {QStringLiteral("kind"), kEventKind},
+            {QStringLiteral("title"), item.title},
+        });
     }
 
-    m_taskCount = tasks;
-    m_eventCount = events;
+    m_taskCount = taskItems.size();
+    m_eventCount = eventItems.size();
     m_lines = lines;
     setRefreshError({});
     emit linesChanged();

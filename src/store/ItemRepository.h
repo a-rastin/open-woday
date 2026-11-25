@@ -64,6 +64,9 @@ public:
     // shapes later phases need — while staying plain CRUD: no Inbox grouping,
     // Today page or Task detail pane yet.
     QList<Item> readByKind(const QString& kind);
+    // Match the stored date prefix for day-only values and timestamps alike.
+    QList<Item> readTasksDueOn(const QString& day);
+    QList<Item> readEventsStartingOn(const QString& day);
     QList<Item> readByDay(const QString& day);
     QList<Item> readByFolder(qlonglong folderId);
     QList<Item> readByParent(qlonglong parentId);

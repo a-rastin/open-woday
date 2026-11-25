@@ -245,6 +245,26 @@ QList<Item> ItemRepository::readByKind(const QString& kind)
         QVariantList{ QVariant(kind) });
 }
 
+QList<Item> ItemRepository::readTasksDueOn(const QString& day)
+{
+    return select(
+        QStringLiteral("SELECT %1 FROM items "
+                       "WHERE kind = 'task' AND deleted_at IS NULL "
+                       "AND substr(due_at, 1, 10) = ? ORDER BY sort_order, id")
+            .arg(itemColumns()),
+        QVariantList{ QVariant(day) });
+}
+
+QList<Item> ItemRepository::readEventsStartingOn(const QString& day)
+{
+    return select(
+        QStringLiteral("SELECT %1 FROM items "
+                       "WHERE kind = 'event' AND deleted_at IS NULL "
+                       "AND substr(start_at, 1, 10) = ? ORDER BY sort_order, id")
+            .arg(itemColumns()),
+        QVariantList{ QVariant(day) });
+}
+
 QList<Item> ItemRepository::readByDay(const QString& day)
 {
     return select(
