@@ -1,11 +1,13 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
 #include <QString>
 #include <QUrl>
 
 #include <cstdio>
 
 #include "store/Database.h"
+#include "app/TodayModel.h"
 
 int main(int argc, char *argv[])
 {
@@ -24,7 +26,10 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    TodayModel todayModel(database);
     QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("todayModel"),
+                                             &todayModel);
     const QUrl rootUrl(QStringLiteral("qrc:/qml/MainWindow.qml"));
     engine.load(rootUrl);
 
