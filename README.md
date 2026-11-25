@@ -6,11 +6,11 @@ from one Qt Quick / QML + C++ codebase, with no account, no cloud and no
 webview.
 
 > **Status: design complete, implementation under way.** Every decision for
-> `v0.1` is settled in the [constitution](#project-documentation). Phases 1 and 2
-> are merged to `main`: the app builds, opens a native Linux window and creates a
-> local SQLite database. Phase 3 is implemented on `phase-3-app-shell`, adding a
-> static three-panel frame, but is not merged yet. There are no live planning
-> pages or packaged release yet. The [build-from-source steps](#build-from-source)
+> `v0.1` is settled in the [constitution](#project-documentation). Phases 1–3
+> are merged to `main`; the current `phase-4-today-page` branch adds an editable
+> Day note and basic Task creation and completion. The Today page is still
+> incomplete, and there is no packaged release yet. The
+> [build-from-source steps](#build-from-source)
 > are live; the install steps still describe the **planned** `v0.1` Linux
 > release. See [Roadmap and status](#roadmap-and-status) for what is next.
 
@@ -144,9 +144,9 @@ after they are tested.
 
 ## Build from source
 
-The current source builds and runs **now**. Phase 2 initializes the local
-SQLite database at startup; the Phase 3 branch adds the static app-shell frame.
-Release packaging (AppImage / `.deb`) is still planned for `v0.1`.
+The current branch builds and runs **now**, initializes a local SQLite database
+at startup, and displays the Today page inside the three-panel shell. Release
+packaging (AppImage / `.deb`) is still planned for `v0.1`.
 
 Prerequisites (checked on the maintainer's machine 2026-11-23):
 
@@ -159,16 +159,14 @@ qmake6 open-woday.pro && make
 ./open-woday
 ```
 
-On `main`, this opens a single, intentionally empty window titled `open-woday`
-with native OS decorations while creating or opening the local database. On
-`phase-3-app-shell`, the same launch shows a dark Sidebar and TopBar, a white
-rounded CentrePanel and a white rounded RightRail. The Sidebar folds before the
-RightRail as the window narrows, and a minimum width keeps the centre surface
-usable.
-
-The Phase 3 frame is static: it contains no live Today page, Tasks, Notes,
-Events, Inbox contents or Quick Add behaviour. Its shortcut chip is a
-platform-correct label only. For `v0.1`, the supported distribution will be the
+The window has native OS decorations, a dark Sidebar and TopBar, and white
+rounded centre and right-rail panels. The Sidebar folds before the RightRail as
+the window narrows. On the current branch, select a date in the day strip to
+edit its plain-text Day note, add a Task, or check and reopen an existing Task.
+Notes and Task completion persist locally. The summary counts Tasks and Events
+for the selected date, but Event lines and badge chips are not yet displayed.
+The Inbox and Quick Add are not functional, and the shortcut chip is a label
+only. For `v0.1`, the supported distribution will be the
 AppImage above. Packaging uses `linuxdeployqt` to bundle Qt libraries into the
 AppImage and `dpkg-deb` to build the `.deb`. See
 [`dev-docs/tech-stack.md`](dev-docs/tech-stack.md) for the proposed source tree
@@ -223,9 +221,10 @@ the former plan and ADRs were fully consolidated into the three constitution
 files (nothing was dropped). **Implementation is under way.** Phase 1 — the
 buildable Qt Quick skeleton — was merged to `main` in PR #1. Phase 2 — the
 SQLite data layer, repositories and persistence verification — was merged in
-PR #4. Phase 3 — the static three-panel app shell and shared visual tokens — is
-implemented on `phase-3-app-shell` and awaits merge; it adds no live product
-pages. Phase 4 (Today page) follows once Phase 3 lands. No release has been
+PR #4. Phase 3 — the static three-panel app shell and shared visual tokens —
+was merged in PR #7. Phase 4 (Today page) is in progress on
+`phase-4-today-page`: Day notes and basic Task interactions are implemented,
+but the full Task/Event line presentation remains incomplete. No release has been
 tagged; releases start with `v0.1` on GitHub. The full phase list, deferred
 backlog and definition of done are in
 [`dev-docs/roadmap.md`](dev-docs/roadmap.md).

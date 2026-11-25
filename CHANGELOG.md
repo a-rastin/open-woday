@@ -54,8 +54,7 @@ design-only history.
     framework-free persistence/restart verification target.
   - Phase 2 spec at `dev-docs/specs/2026-11-24-16-data-layer/` and review record
     at `.code-review/2026-11-24-16-data-layer.md`.
-- **Phase 3 — app-shell: static three-panel frame.** Implemented on
-  `phase-3-app-shell`.
+- **Phase 3 — app-shell: static three-panel frame.** Merged to `main` in PR #7.
   - `Theme.qml` centralizes the canvas, sidebar, panel, chip, accent, radius,
     spacing and typography tokens, resolving Inter with a system-font fallback.
   - `Sidebar.qml`, `TopBar.qml`, `CentrePanel.qml` and `RightRail.qml` compose a
@@ -64,9 +63,20 @@ design-only history.
   - The Sidebar folds before the RightRail on resize. A minimum window width
     preserves a usable centre surface, and the TopBar elides its title and
     compacts its Quick Add label at narrow widths.
-  - The shell shows a platform-correct `Ctrl` / `⌘` shortcut label but no live
-    Today page, Item data, editor, Inbox contents or Quick Add behaviour.
+  - The shell initially showed a platform-correct `Ctrl` / `⌘` shortcut label
+    without live planning pages or Quick Add behaviour.
   - Phase 3 spec at `dev-docs/specs/2026-11-25-06-app-shell/`.
+- **Phase 4 — today-page: partial implementation** on `phase-4-today-page`.
+  - A selectable ten-day strip, date label and summary show the selected day's
+    Task and Event counts. Tasks due that day appear as checkable lines.
+  - A plain-text Day note is created or loaded per date and saved locally.
+    Users can add Tasks to the selected date and complete or reopen them;
+    completion and note content persist across restarts.
+  - Event lines and badge chips are not yet rendered; the full Phase 4
+    Task/Event presentation and merge gate remain incomplete.
+  - The framework-free persistence verification covers Today model and restart
+    behaviour. The Phase 4 spec is at
+    `dev-docs/specs/2026-11-25-13-today-page/`.
 
 ### Changed
 
