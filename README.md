@@ -6,10 +6,11 @@ from one Qt Quick / QML + C++ codebase, with no account, no cloud and no
 webview.
 
 > **Status: design complete, implementation under way.** Every decision for
-> `v0.1` is settled in the [constitution](#project-documentation). Phase 1 has
-> produced a buildable Qt Quick skeleton that opens one empty window on Linux —
-> there is now application code you can compile and run, but no product features
-> and no packaged release yet. The [build-from-source steps](#build-from-source)
+> `v0.1` is settled in the [constitution](#project-documentation). Phases 1 and 2
+> are merged to `main`: the app builds, opens a native Linux window and creates a
+> local SQLite database. Phase 3 is implemented on `phase-3-app-shell`, adding a
+> static three-panel frame, but is not merged yet. There are no live planning
+> pages or packaged release yet. The [build-from-source steps](#build-from-source)
 > are live; the install steps still describe the **planned** `v0.1` Linux
 > release. See [Roadmap and status](#roadmap-and-status) for what is next.
 
@@ -117,7 +118,9 @@ the project and find the next unit of work:
 2. Read [`dev-docs/mission.md`](dev-docs/mission.md) — what/why, principles,
    scope, non-goals and the `v0.1` definition of done.
 3. Read [`dev-docs/roadmap.md`](dev-docs/roadmap.md) — the 12 ordered `v0.1`
-   phases. **The next phase is the lowest-numbered one not marked `done`.**
+   phases. **The workflow selects the lowest-numbered phase not marked `done`;**
+   see [Roadmap and status](#roadmap-and-status) for the current branch and
+   merge state.
 4. Read [`dev-docs/tech-stack.md`](dev-docs/tech-stack.md) before writing any
    code — stack, schema, visual tokens and engineering rules.
 
@@ -141,8 +144,9 @@ after they are tested.
 
 ## Build from source
 
-The Phase 1 skeleton builds and runs **now**. Release packaging (AppImage /
-`.deb`) is still planned for `v0.1`.
+The current source builds and runs **now**. Phase 2 initializes the local
+SQLite database at startup; the Phase 3 branch adds the static app-shell frame.
+Release packaging (AppImage / `.deb`) is still planned for `v0.1`.
 
 Prerequisites (checked on the maintainer's machine 2026-11-23):
 
@@ -155,30 +159,38 @@ qmake6 open-woday.pro && make
 ./open-woday
 ```
 
-This opens a single, intentionally empty window titled `open-woday` with native
-OS decorations — no product UI or network yet (Phase 1 ships only the
-runnable build/launch seam; Phase 2 adds the local database at startup). For
-`v0.1`, the supported distribution will be
-the AppImage above. Packaging uses `linuxdeployqt` to bundle Qt libraries into
-the AppImage and `dpkg-deb` to build the `.deb`. See
+On `main`, this opens a single, intentionally empty window titled `open-woday`
+with native OS decorations while creating or opening the local database. On
+`phase-3-app-shell`, the same launch shows a dark Sidebar and TopBar, a white
+rounded CentrePanel and a white rounded RightRail. The Sidebar folds before the
+RightRail as the window narrows, and a minimum width keeps the centre surface
+usable.
+
+The Phase 3 frame is static: it contains no live Today page, Tasks, Notes,
+Events, Inbox contents or Quick Add behaviour. Its shortcut chip is a
+platform-correct label only. For `v0.1`, the supported distribution will be the
+AppImage above. Packaging uses `linuxdeployqt` to bundle Qt libraries into the
+AppImage and `dpkg-deb` to build the `.deb`. See
 [`dev-docs/tech-stack.md`](dev-docs/tech-stack.md) for the proposed source tree
 and build details.
 
 ---
 
-## Configuration & usage (planned behaviour)
+## Configuration & usage
 
-- **No setup, no account, no configuration file.** On first launch the app
-  creates a single SQLite database in the platform app-data directory, e.g.
+- **Local data:** no setup, account or configuration file. On first launch the
+  app creates a single SQLite database in the platform app-data directory, e.g.
   `$XDG_DATA_HOME/open-woday/open-woday.db` on Linux.
 - **No network.** There is no server, no account and no sync; data lives on one
   device.
 - **Back up or move your data** by copying that database file while the app is
-  closed, or use the one-way UTF-8 CSV export (one row per Item).
-- **Keyboard:** `Ctrl+K` / `⌘K` focuses Quick Add, `Ctrl+N` / `⌘N` creates a
-  Task. Labels are platform-correct (`Ctrl` on Linux/Windows, `⌘` on macOS).
-- **Quick Add** understands kind prefixes (`T:`, `N:`, `E:`), `today`,
-  `tomorrow`, weekday names, `HH:mm`, `#tag` (created if missing) and
+  closed. The one-way UTF-8 CSV export (one row per Item) is planned for `v0.1`.
+- **Keyboard (planned):** `Ctrl+K` / `⌘K` will focus Quick Add and `Ctrl+N` /
+  `⌘N` will create a Task. The Phase 3 shell already shows platform-correct
+  labels (`Ctrl` on Linux/Windows, `⌘` on macOS), but does not bind these
+  shortcuts yet.
+- **Quick Add (planned)** will understand kind prefixes (`T:`, `N:`, `E:`),
+  `today`, `tomorrow`, weekday names, `HH:mm`, `#tag` (created if missing) and
   `!` / `!!` / `!!!` for low / medium / high priority. English only.
 
 Full behavioural detail is in [`dev-docs/tech-stack.md`](dev-docs/tech-stack.md).
@@ -189,15 +201,15 @@ Full behavioural detail is in [`dev-docs/tech-stack.md`](dev-docs/tech-stack.md)
 
 Design is complete: 22 decisions were settled on 2026-11-23, and on 2026-11-24
 the former plan and ADRs were fully consolidated into the three constitution
-files (nothing was dropped). **Implementation is under way.** Phase 1 — a
-buildable, runnable Qt Quick skeleton (`open-woday.pro`, one C++ entry point and
-one empty QML window) that opens a native Linux window, shipping no product
-surface — was reviewed, documented and merged to `main` (PR #1); it is marked
-`done` in [`dev-docs/roadmap.md`](dev-docs/roadmap.md). Phase 2 — data-layer is
-`in-progress` on `phase-2-data-layer` and, as the lowest-numbered phase not
-marked `done`, is the next unit of work. No release has been tagged; releases
-start with `v0.1` on GitHub. The full phase list, deferred backlog and
-definition of done are in the roadmap.
+files (nothing was dropped). **Implementation is under way.** Phase 1 — the
+buildable Qt Quick skeleton — was merged to `main` in PR #1. Phase 2 — the
+SQLite data layer, repositories and persistence verification — was merged in
+PR #4. Phase 3 — the static three-panel app shell and shared visual tokens — is
+implemented on `phase-3-app-shell` and awaits merge; it adds no live product
+pages. Phase 4 (Today page) follows once Phase 3 lands. No release has been
+tagged; releases start with `v0.1` on GitHub. The full phase list, deferred
+backlog and definition of done are in
+[`dev-docs/roadmap.md`](dev-docs/roadmap.md).
 
 ---
 
