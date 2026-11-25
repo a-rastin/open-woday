@@ -1,6 +1,8 @@
 <RCC>
     <qresource prefix="/qml">
         <file alias="MainWindow.qml">src/qml/MainWindow.qml</file>
+        <file alias="Theme.qml">src/qml/Theme.qml</file>
+        <file alias="TopBar.qml">src/qml/TopBar.qml</file>
     </qresource>
     <qresource prefix="/store">
         <file alias="schema.sql">src/store/schema.sql</file>
