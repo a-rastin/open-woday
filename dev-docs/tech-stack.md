@@ -180,10 +180,13 @@ and "every Task/Event owns a Note" cheap later.
 
 ### 6.3 The day note
 
-`items` row with `kind='note'` and `day='YYYY-MM-DD'`, unique per date. The Today
-page opens it; its Blocks include the day's Task and Event lines (to-do Blocks
-point at real Task Items; Event lines point at real Event Items) plus free
-writing. Writing a to-do line in it creates a Task due that day.
+`items` row with `kind='note'` and `day='YYYY-MM-DD'`, unique per date among
+active Day notes. The `one_day_note_per_day` partial unique index covers only
+rows with `deleted_at IS NULL`, matching normal reads: a soft-deleted Day note
+keeps its date but no longer reserves it, so a replacement for that date can be
+created. The Today page opens it; its Blocks include the day's Task and Event
+lines (to-do Blocks point at real Task Items; Event lines point at real Event
+Items) plus free writing. Writing a to-do line in it creates a Task due that day.
 
 ### 6.4 Rules
 
@@ -226,7 +229,7 @@ CREATE TABLE items (
   day            TEXT,                       -- 'YYYY-MM-DD', day note only
   sort_order     INTEGER NOT NULL DEFAULT 0
 );
-CREATE UNIQUE INDEX one_day_note_per_day ON items(day) WHERE day IS NOT NULL;
+CREATE UNIQUE INDEX one_day_note_per_day ON items(day) WHERE day IS NOT NULL AND deleted_at IS NULL;
 
 CREATE TABLE blocks (
   id           INTEGER PRIMARY KEY,

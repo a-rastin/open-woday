@@ -1,0 +1,13 @@
+# qmake build state and generated files (root app and tests/ verification seam)
+# Qt's qmake6 generates these from open-woday.pro / verify-persistence.pro;
+# ignoring them keeps build output out of the working tree.
+.qmake.stash
+Makefile
+*.o
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+
+# Built binaries (Linux)
+/open-woday
+/tests/verify-persistence
