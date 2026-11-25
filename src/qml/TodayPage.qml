@@ -49,6 +49,26 @@ Item {
         anchors.top: heading.bottom
         anchors.topMargin: page.theme.gap
         width: parent.width
+        Row {
+            width: parent.width
+            spacing: page.theme.gap
+            TextField {
+                id: taskTitle
+                width: Math.max(0, parent.width - addTaskButton.width - parent.spacing)
+                placeholderText: qsTr("New task")
+                Accessible.name: qsTr("New task")
+                onAccepted: addTaskButton.clicked()
+            }
+            Button {
+                id: addTaskButton
+                text: qsTr("Add task")
+                enabled: taskTitle.text.trim().length > 0
+                onClicked: {
+                    if (todayModel.addTask(taskTitle.text))
+                        taskTitle.clear()
+                }
+            }
+        }
         Repeater {
             model: todayModel.lines
             delegate: CheckBox {

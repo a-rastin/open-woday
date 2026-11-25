@@ -134,10 +134,10 @@ QVariantList TodayModel::lines() const
     return m_lines;
 }
 
-void TodayModel::addTask(const QString& title)
+bool TodayModel::addTask(const QString& title)
 {
     if (title.trimmed().isEmpty())
-        return;
+        return false;
     Item item;
     item.kind = kTaskKind;
     item.title = title.trimmed();
@@ -146,9 +146,10 @@ void TodayModel::addTask(const QString& title)
     ItemRepository items(m_database);
     if (!items.create(item)) {
         setDayNoteError(items.lastError());
-        return;
+        return false;
     }
     refreshLinesAndSummary();
+    return true;
 }
 
 bool TodayModel::setTaskCompleted(const QString& id, bool completed)

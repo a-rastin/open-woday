@@ -62,7 +62,7 @@ public:
     QString dayNoteText() const;
     QString dayNoteError() const;
     QVariantList lines() const;
-    Q_INVOKABLE void addTask(const QString& title);
+    Q_INVOKABLE bool addTask(const QString& title);
     Q_INVOKABLE bool setTaskCompleted(const QString& id, bool completed);
     Q_INVOKABLE void setDayNoteText(const QString& text);
 
