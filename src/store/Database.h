@@ -4,12 +4,15 @@
 #include <QSqlDatabase>
 #include <QString>
 
-// Database owns the single local SQLite connection. On open() it creates the
-// app-data directory and the one database file, enables foreign-key
-// enforcement, and applies the versioned migrations from the single versioned
-// SQL source (schema.sql), writing the applied version to the meta table.
-// Startup must fail loudly (non-zero exit, clear diagnostic) if open() fails,
-// so a half-working planner is never left behind.
+// Database owns one connection to the single local SQLite file. Each instance
+// registers that connection under a process-unique name and alone closes and
+// removes it, so several instances can be open at once without replacing or
+// removing each other's connection. On open() it creates the app-data directory
+// and the one database file, enables foreign-key enforcement, and applies the
+// versioned migrations from the single versioned SQL source (schema.sql),
+// writing the applied version to the meta table. Startup must fail loudly
+// (non-zero exit, clear diagnostic) if open() fails, so a half-working planner
+// is never left behind.
 class Database
 {
 public:
@@ -25,8 +28,10 @@ public:
     // $XDG_DATA_HOME/open-woday on Linux).
     static QString defaultDataDirectory();
 
-    // Create/open the database and apply any pending migrations. Returns false
-    // and sets lastError() on failure. Safe to call again after close().
+    // Create/open the database and apply any pending migrations. Each call
+    // registers its own uniquely named connection, so two live Database
+    // instances do not interfere. Returns false and sets lastError() on
+    // failure. Safe to call again after close().
     bool open();
     // Close the connection (idempotent).
     void close();
@@ -36,8 +41,8 @@ public:
     // Clear, human-readable diagnostic for a failed open(); empty on success.
     QString lastError() const;
 
-    // Borrow the single SQLite connection for store-layer repositories. The
-    // handle must not be closed or removed; Database owns its lifetime.
+    // Borrow this instance's SQLite connection for store-layer repositories.
+    // The handle must not be closed or removed; Database owns its lifetime.
     QSqlDatabase connection() const;
 
 private:
@@ -49,6 +54,7 @@ private:
     void releaseConnection();
 
     QSqlDatabase m_db;
+    QString m_connectionName;   // the connection this instance alone removes
     QString m_error;
     int m_schemaVersion = 0;
 };

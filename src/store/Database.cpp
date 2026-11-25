@@ -9,10 +9,22 @@
 #include <QVariant>
 
 #include <algorithm>
+#include <atomic>
 
 namespace {
 
-const char* const kConnectionName = "open-woday-store";
+// Qt registers QSqlDatabase connections by name in one process-global table.
+// Every live Database must own a distinct name: reusing a single name makes
+// addDatabase() silently replace another instance's connection, and lets
+// removeDatabase() pull a connection that instance is still using.
+const char* const kConnectionNamePrefix = "open-woday-store-";
+
+QString uniqueConnectionName()
+{
+    static std::atomic<int> nextId { 0 };
+    return QString::fromUtf8(kConnectionNamePrefix)
+        + QString::number(++nextId);
+}
 
 // Versioned migrations. Every migration maps a monotonically increasing version
 // to the SQL source that upgrades the database to it. v0.1 has a single
@@ -76,6 +88,10 @@ QString Database::defaultDataDirectory()
 
 bool Database::open()
 {
+    // A second open() without an intervening close() must not leave the
+    // previously registered connection with no owner. Start from a clean slate.
+    releaseConnection();
+
     m_error.clear();
     m_schemaVersion = 0;
 
@@ -90,8 +106,11 @@ bool Database::open()
     const QString databasePath =
         directory + QLatin1Char('/') + databaseFileName();
 
+    // Each live instance registers (and later removes) only its own
+    // connection, so no instance can replace or remove another's.
+    m_connectionName = uniqueConnectionName();
     m_db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
-                                     QString::fromUtf8(kConnectionName));
+                                     m_connectionName);
     m_db.setDatabaseName(databasePath);
     if (!m_db.open()) {
         fail(QStringLiteral("could not open the SQLite file '%1': %2")
@@ -292,8 +311,13 @@ void Database::releaseConnection()
         if (m_db.isOpen()) {
             m_db.close();
         }
-        const QString name = m_db.connectionName();
         m_db = QSqlDatabase();          // drop our handle before removing
+    }
+    if (!m_connectionName.isEmpty()) {
+        // Remove only the connection this instance registered, by the name it
+        // owns — never a connection another live Database may be using.
+        const QString name = m_connectionName;
+        m_connectionName.clear();
         QSqlDatabase::removeDatabase(name);
     }
 }

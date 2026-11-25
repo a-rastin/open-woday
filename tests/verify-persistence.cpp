@@ -18,6 +18,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QFile>
+#include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QString>
@@ -2812,6 +2813,167 @@ int untitledItemRoundTripsThroughCreateAndUpdate()
     return 0;
 }
 
+// Code-review finding: two live Database instances must not share one Qt SQL
+// connection name. With a shared name, opening the second silently replaces
+// (and invalidates) the first's connection via QSqlDatabase::addDatabase(),
+// and a close() can remove a connection another instance still holds. Each
+// instance now registers and removes only its own uniquely named connection.
+// Overlapping lifetimes are exercised together with closure in BOTH orders:
+// closing the first then using the second, and closing the second then using
+// the first. All assertions go through the public repository API against the
+// one local SQLite file, never a side channel.
+int overlappingDatabasesKeepIndependentConnections()
+{
+    // Closure order 1: close the first instance, keep using the second.
+    {
+        QTemporaryDir dataDir;
+        if (freshAppData(&dataDir) != 0) {
+            return 1;
+        }
+
+        Database first;
+        Database second;
+        if (!first.open()) {
+            return fail(QStringLiteral(
+                            "the first Database could not be opened: %1")
+                            .arg(first.lastError()));
+        }
+        if (!second.open()) {
+            return fail(QStringLiteral(
+                            "a second Database could not be opened while the "
+                            "first was live: %1")
+                            .arg(second.lastError()));
+        }
+
+        // Opening the second must not have replaced the first's connection.
+        if (!check(first.connection().isValid() && first.connection().isOpen(),
+                   QStringLiteral(
+                       "opening a second Database invalidated the first's "
+                       "connection"))) {
+            return 1;
+        }
+        if (!check(second.connection().isValid() && second.connection().isOpen(),
+                   QStringLiteral(
+                       "the second Database's connection is not open"))) {
+            return 1;
+        }
+        if (!check(first.connection().connectionName()
+                       != second.connection().connectionName(),
+                   QStringLiteral(
+                       "two live Database instances share one connection "
+                       "name"))) {
+            return 1;
+        }
+
+        ItemRepository itemsFirst(first);
+        ItemRepository itemsSecond(second);
+
+        // Write through the second, read through the first: the first's
+        // connection still works after the second opened, and both see the
+        // same local file.
+        Item seed;
+        seed.kind = QStringLiteral("task");
+        seed.title = QStringLiteral("Shared-file probe");
+        const std::optional<Item> written = itemsSecond.create(seed);
+        if (!written) {
+            return fail(QStringLiteral(
+                            "the second Database could not write an Item: %1")
+                            .arg(itemsSecond.lastError()));
+        }
+        const std::optional<Item> viaFirst = itemsFirst.readById(written->id);
+        if (!check(viaFirst && viaFirst->title == seed.title,
+                   QStringLiteral(
+                       "the first Database stopped working when the second "
+                       "opened"))) {
+            return 1;
+        }
+
+        // Closing the first must not remove the second's connection.
+        first.close();
+        const std::optional<Item> afterFirstClose =
+            itemsSecond.readById(written->id);
+        if (!check(afterFirstClose && afterFirstClose->title == seed.title,
+                   QStringLiteral(
+                       "closing the first Database removed the second's "
+                       "connection"))) {
+            return 1;
+        }
+        Item afterCloseItem;
+        afterCloseItem.kind = QStringLiteral("note");
+        afterCloseItem.title = QStringLiteral("Written after the first closed");
+        if (!itemsSecond.create(afterCloseItem)) {
+            return fail(QStringLiteral(
+                            "the second Database could not write after the "
+                            "first closed: %1")
+                            .arg(itemsSecond.lastError()));
+        }
+    }
+
+    // Closure order 2: close the second instance, keep using the first.
+    {
+        QTemporaryDir dataDir;
+        if (freshAppData(&dataDir) != 0) {
+            return 1;
+        }
+
+        Database first;
+        Database second;
+        if (!first.open()) {
+            return fail(QStringLiteral(
+                            "the first Database could not be opened: %1")
+                            .arg(first.lastError()));
+        }
+        if (!second.open()) {
+            return fail(QStringLiteral(
+                            "a second Database could not be opened while the "
+                            "first was live: %1")
+                            .arg(second.lastError()));
+        }
+
+        ItemRepository itemsFirst(first);
+        ItemRepository itemsSecond(second);
+
+        Item seed;
+        seed.kind = QStringLiteral("task");
+        seed.title = QStringLiteral("Shared-file probe, second order");
+        const std::optional<Item> written = itemsFirst.create(seed);
+        if (!written) {
+            return fail(QStringLiteral(
+                            "the first Database could not write an Item: %1")
+                            .arg(itemsFirst.lastError()));
+        }
+        const std::optional<Item> viaSecond = itemsSecond.readById(written->id);
+        if (!check(viaSecond && viaSecond->title == seed.title,
+                   QStringLiteral(
+                       "the second Database could not read the first's Item "
+                       "while both were live"))) {
+            return 1;
+        }
+
+        // Closing the second must not remove the first's connection.
+        second.close();
+        const std::optional<Item> afterSecondClose =
+            itemsFirst.readById(written->id);
+        if (!check(afterSecondClose && afterSecondClose->title == seed.title,
+                   QStringLiteral(
+                       "closing the second Database removed the first's "
+                       "connection"))) {
+            return 1;
+        }
+        Item afterCloseItem;
+        afterCloseItem.kind = QStringLiteral("note");
+        afterCloseItem.title = QStringLiteral("Written after the second closed");
+        if (!itemsFirst.create(afterCloseItem)) {
+            return fail(QStringLiteral(
+                            "the first Database could not write after the "
+                            "second closed: %1")
+                            .arg(itemsFirst.lastError()));
+        }
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
@@ -2956,12 +3118,17 @@ int main(int argc, char* argv[])
     if (mergeGateRepresentativeSetSurvivesRestart() != 0) {
         return 1;
     }
+    if (overlappingDatabasesKeepIndependentConnections() != 0) {
+        return 1;
+    }
 
     std::puts("verify-persistence: PASS - the Phase 2 merge gate holds: one "
               "representative set of Items of every kind and Blocks of every "
               "type, with every field, query shape, update, soft-delete, Block "
               "order, cascade and constraint error, survives a restart "
               "unchanged; the schema is created on first launch, left intact on "
-              "reopen, and the persisted schema version survives");
+              "reopen, and the persisted schema version survives; two live "
+              "Database instances keep independent connections and survive "
+              "closure in either order");
     return 0;
 }
