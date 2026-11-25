@@ -10,11 +10,13 @@ CONFIG -= app_bundle
 INCLUDEPATH += $$PWD/../src
 
 SOURCES += verify-persistence.cpp \
+           ../src/app/TodayModel.cpp \
            ../src/store/Database.cpp \
            ../src/store/ItemRepository.cpp \
            ../src/store/BlockRepository.cpp
 
 HEADERS += ../src/store/Database.h \
+           ../src/app/TodayModel.h \
            ../src/store/StoreHelpers.h \
            ../src/store/ItemRepository.h \
            ../src/store/BlockRepository.h

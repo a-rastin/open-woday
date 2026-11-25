@@ -32,6 +32,7 @@
 #include "store/Database.h"
 #include "store/BlockRepository.h"
 #include "store/ItemRepository.h"
+#include "app/TodayModel.h"
 
 namespace {
 
@@ -70,6 +71,55 @@ int freshAppData(QTemporaryDir* dataDir)
 }
 
 } // namespace
+
+int dayNoteWritingSurvivesRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0) {
+        return 1;
+    }
+    const QString writing = QString::fromUtf8("First line\n\nسلام\nLast line");
+    QString day;
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(database.lastError());
+        }
+        TodayModel model(database);
+        day = model.selectedDate();
+        if (!check(QMetaObject::invokeMethod(&model, "setDayNoteText",
+                                              Q_ARG(QString, writing)),
+                   QStringLiteral("Day note editing is unavailable"))) {
+            return 1;
+        }
+    }
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(database.lastError());
+        }
+        TodayModel model(database);
+        if (!check(model.property("dayNoteText").toString() == writing,
+                   QStringLiteral("Day note writing did not survive restart"))) {
+            return 1;
+        }
+        ItemRepository items(database);
+        const QList<Item> notes = items.readByDay(day);
+        if (!check(notes.size() == 1 && notes.first().kind == QStringLiteral("note"),
+                   QStringLiteral("opening a date did not reuse one Day note"))) {
+            return 1;
+        }
+        BlockRepository blocks(database);
+        const QList<Block> lines = blocks.readByItem(notes.first().id);
+        if (!check(lines.size() == 4 && lines.at(1).content.isEmpty()
+                       && lines.at(2).content == QString::fromUtf8("سلام")
+                       && lines.at(3).position == 3,
+                   QStringLiteral("writing was not stored as ordered Blocks"))) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 // Issue 03, slice 1: every column of one Item round-trips unchanged through
 // the write -> restart -> read-back seam. The expected values are independent
@@ -3067,6 +3117,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    if (dayNoteWritingSurvivesRestart() != 0) {
+        return 1;
+    }
     if (fullItemColumnsSurviveRestart() != 0) {
         return 1;
     }
