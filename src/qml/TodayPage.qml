@@ -44,107 +44,107 @@ Item {
         }
     }
 
-    Column {
-        id: taskLines
-        anchors.top: heading.bottom
-        anchors.topMargin: page.theme.gap
-        width: parent.width
-        Row {
-            width: parent.width
-            spacing: page.theme.gap
-            TextField {
-                id: taskTitle
-                width: Math.max(0, parent.width - addTaskButton.width - parent.spacing)
-                placeholderText: qsTr("New task")
-                Accessible.name: qsTr("New task")
-                onAccepted: addTaskButton.clicked()
-            }
-            Button {
-                id: addTaskButton
-                text: qsTr("Add task")
-                enabled: taskTitle.text.trim().length > 0
-                onClicked: {
-                    if (todayModel.addTask(taskTitle.text))
-                        taskTitle.clear()
-                }
-            }
-        }
-        Repeater {
-            model: todayModel.lines
-            delegate: Loader {
-                required property var modelData
-                width: taskLines.width
-                sourceComponent: modelData.kind === "event" ? eventLine : taskLine
-            }
-        }
-        Component {
-            id: eventLine
-            Text {
-                width: taskLines.width
-                height: 40
-                text: qsTr("Event: %1").arg(parent.modelData.title)
-                color: page.theme.panelText
-                font.family: page.theme.font
-                font.pixelSize: page.theme.bodySize
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
-            }
-        }
-        Component {
-            id: taskLine
-            CheckBox {
-                width: taskLines.width
-                text: parent.modelData.title
-                checked: parent.modelData.completed
-                font.family: page.theme.font
-                font.pixelSize: page.theme.bodySize
-                // The stored Item controls the check state, including when a
-                // write fails; clicking must not break the checked binding.
-                nextCheckState: function() { return checkState }
-                onClicked: todayModel.setTaskCompleted(parent.modelData.id, !parent.modelData.completed)
-                indicator: Rectangle {
-                    x: 0
-                    y: (parent.height - height) / 2
-                    width: 18
-                    height: 18
-                    radius: page.theme.radiusControl / 2
-                    color: parent.checked ? page.theme.accent : page.theme.panel
-                    border.color: parent.checked ? page.theme.accent : page.theme.muted
-                    Text {
-                        anchors.centerIn: parent
-                        text: parent.parent.checked ? "✓" : ""
-                        color: page.theme.panel
-                        font.family: page.theme.font
-                        font.pixelSize: page.theme.bodySize
-                    }
-                }
-                contentItem: Text {
-                    leftPadding: 26
-                    text: parent.text
-                    color: page.theme.panelText
-                    font: parent.font
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                }
-            }
-        }
-    }
-
     Flickable {
         id: writingArea
-        anchors.top: taskLines.bottom
+        anchors.top: heading.bottom
         anchors.topMargin: page.theme.gap
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: errors.top
         contentWidth: width
-        contentHeight: Math.max(height, editor.implicitHeight)
+        contentHeight: taskLines.height + page.theme.gap + editor.height
         clip: true
+        ScrollBar.vertical: ScrollBar {}
+
+        Column {
+            id: taskLines
+            width: writingArea.width
+            Row {
+                width: parent.width
+                spacing: page.theme.gap
+                TextField {
+                    id: taskTitle
+                    width: Math.max(0, parent.width - addTaskButton.width - parent.spacing)
+                    placeholderText: qsTr("New task")
+                    Accessible.name: qsTr("New task")
+                    onAccepted: addTaskButton.clicked()
+                }
+                Button {
+                    id: addTaskButton
+                    text: qsTr("Add task")
+                    enabled: taskTitle.text.trim().length > 0
+                    onClicked: {
+                        if (todayModel.addTask(taskTitle.text))
+                            taskTitle.clear()
+                    }
+                }
+            }
+            Repeater {
+                model: todayModel.lines
+                delegate: Loader {
+                    required property var modelData
+                    width: taskLines.width
+                    sourceComponent: modelData.kind === "event" ? eventLine : taskLine
+                }
+            }
+            Component {
+                id: eventLine
+                Text {
+                    width: taskLines.width
+                    height: 40
+                    text: qsTr("Event: %1").arg(parent.modelData.title)
+                    color: page.theme.panelText
+                    font.family: page.theme.font
+                    font.pixelSize: page.theme.bodySize
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+            }
+            Component {
+                id: taskLine
+                CheckBox {
+                    width: taskLines.width
+                    text: parent.modelData.title
+                    checked: parent.modelData.completed
+                    font.family: page.theme.font
+                    font.pixelSize: page.theme.bodySize
+                    // The stored Item controls the check state, including when a
+                    // write fails; clicking must not break the checked binding.
+                    nextCheckState: function() { return checkState }
+                    onClicked: todayModel.setTaskCompleted(parent.modelData.id, !parent.modelData.completed)
+                    indicator: Rectangle {
+                        x: 0
+                        y: (parent.height - height) / 2
+                        width: 18
+                        height: 18
+                        radius: page.theme.radiusControl / 2
+                        color: parent.checked ? page.theme.accent : page.theme.panel
+                        border.color: parent.checked ? page.theme.accent : page.theme.muted
+                        Text {
+                            anchors.centerIn: parent
+                            text: parent.parent.checked ? "✓" : ""
+                            color: page.theme.panel
+                            font.family: page.theme.font
+                            font.pixelSize: page.theme.bodySize
+                        }
+                    }
+                    contentItem: Text {
+                        leftPadding: 26
+                        text: parent.text
+                        color: page.theme.panelText
+                        font: parent.font
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                    }
+                }
+            }
+        }
 
         TextEdit {
             id: editor
+            y: taskLines.height + page.theme.gap
             width: writingArea.width
-            height: Math.max(writingArea.height, implicitHeight)
+            height: Math.max(160, writingArea.height - y, implicitHeight)
             color: page.theme.panelText
             font.family: page.theme.font
             font.pixelSize: page.theme.bodySize
@@ -153,6 +153,17 @@ Item {
             selectByMouse: true
             text: todayModel.dayNoteText
             Accessible.name: qsTr("Day note")
+            onCursorRectangleChanged: {
+                if (!activeFocus || writingArea.height <= 0)
+                    return
+                const cursorTop = y + cursorRectangle.y
+                const cursorBottom = cursorTop + cursorRectangle.height
+                if (cursorBottom > writingArea.contentY + writingArea.height)
+                    writingArea.contentY = Math.min(writingArea.contentHeight - writingArea.height,
+                                                    cursorBottom - writingArea.height)
+                else if (cursorTop < writingArea.contentY)
+                    writingArea.contentY = Math.max(0, cursorTop)
+            }
             onTextChanged: {
                 if (activeFocus && text !== todayModel.dayNoteText)
                     todayModel.setDayNoteText(text)
