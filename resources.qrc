@@ -3,6 +3,7 @@
         <file alias="MainWindow.qml">src/qml/MainWindow.qml</file>
         <file alias="Theme.qml">src/qml/Theme.qml</file>
         <file alias="CentrePanel.qml">src/qml/CentrePanel.qml</file>
+        <file alias="RightRail.qml">src/qml/RightRail.qml</file>
         <file alias="Sidebar.qml">src/qml/Sidebar.qml</file>
         <file alias="TopBar.qml">src/qml/TopBar.qml</file>
     </qresource>
