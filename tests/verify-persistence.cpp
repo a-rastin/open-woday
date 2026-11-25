@@ -17,6 +17,7 @@
 
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QEventLoop>
 #include <QFile>
 #include <QSqlDatabase>
 #include <QSqlDriver>
@@ -24,6 +25,7 @@
 #include <QSqlQuery>
 #include <QString>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QVariant>
 #include <QtGlobal>
 
@@ -73,6 +75,62 @@ int freshAppData(QTemporaryDir* dataDir)
 }
 
 } // namespace
+
+int debouncedDayNoteWrites()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    Database database;
+    if (!database.open())
+        return fail(database.lastError());
+    TodayModel model(database);
+    ItemRepository items(database);
+    BlockRepository blocks(database);
+    const auto notes = items.readByDay(model.selectedDate());
+    if (!check(notes.size() == 1, QStringLiteral("missing Day note")))
+        return 1;
+    const auto id = notes.first().id;
+    model.setDayNoteText(QStringLiteral("first\nsecond"));
+    if (!check(blocks.readByItem(id).isEmpty(), QStringLiteral("note saved before debounce")))
+        return 1;
+    auto wait = [](int ms) {
+        QEventLoop loop;
+        QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+    wait(250);
+    model.setDayNoteText(QStringLiteral("first\nchanged"));
+    wait(250);
+    if (!check(blocks.readByItem(id).isEmpty(), QStringLiteral("debounce was not restarted")))
+        return 1;
+    wait(300);
+    auto stored = blocks.readByItem(id);
+    if (!check(stored.size() == 2 && stored.at(1).content == QStringLiteral("changed"),
+               QStringLiteral("debounced save did not persist latest text")))
+        return 1;
+    QSqlQuery query(database.connection());
+    if (!query.exec(QStringLiteral("CREATE TEMP TABLE block_updates (id INTEGER)"))
+        || !query.exec(QStringLiteral("CREATE TEMP TRIGGER count_block_updates AFTER UPDATE ON blocks "
+                                      "BEGIN INSERT INTO block_updates VALUES (NEW.id); END")))
+        return fail(query.lastError().text());
+    model.setDayNoteText(QStringLiteral("first\nfinal"));
+    if (!check(model.flushDayNote(), QStringLiteral("explicit flush failed")))
+        return 1;
+    if (!query.exec(QStringLiteral("SELECT id FROM block_updates")) || !query.next())
+        return fail(QStringLiteral("changed line was not updated"));
+    if (!check(query.value(0).toLongLong() == stored.at(1).id && !query.next(),
+               QStringLiteral("unchanged lines were updated")))
+        return 1;
+    model.setDayNoteText(QStringLiteral("temporary"));
+    model.setDayNoteText(QStringLiteral("first\nfinal"));
+    wait(500);
+    stored = blocks.readByItem(id);
+    if (!check(stored.size() == 2 && stored.at(1).content == QStringLiteral("final"),
+               QStringLiteral("reverting pending text changed persisted note")))
+        return 1;
+    return 0;
+}
 
 // Replacement uses ordered row identities, not stored positions, even when
 // positions were written outside the repository's usual contiguous sequence.
@@ -3515,6 +3573,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    if (debouncedDayNoteWrites() != 0) {
+        return 1;
+    }
     if (replaceTextWithNoncontiguousPositions() != 0) {
         return 1;
     }

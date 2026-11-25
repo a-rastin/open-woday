@@ -157,6 +157,10 @@ Item {
                 if (activeFocus && text !== todayModel.dayNoteText)
                     todayModel.setDayNoteText(text)
             }
+            onActiveFocusChanged: {
+                if (!activeFocus)
+                    todayModel.flushDayNote()
+            }
         }
     }
 

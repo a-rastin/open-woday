@@ -346,6 +346,9 @@ bool BlockRepository::replaceText(qlonglong itemId, const QString& text)
     const QStringList lines = text.split(QLatin1Char('\n'), Qt::KeepEmptyParts);
     for (int i = 0; i < lines.size(); ++i) {
         if (i < existing.size()) {
+            if (existing.at(i).content == lines.at(i)
+                && existing.at(i).position == i)
+                continue;
             QSqlQuery update(db);
             update.prepare(QStringLiteral("UPDATE blocks SET content = ?, position = ? WHERE id = ?"));
             update.addBindValue(lines.at(i).isNull() ? QStringLiteral("") : lines.at(i));

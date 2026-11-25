@@ -6,6 +6,7 @@
 
 #include <QLocale>
 #include <QDateTime>
+#include <QCoreApplication>
 
 namespace {
 
@@ -31,12 +32,23 @@ TodayModel::TodayModel(Database& database, QObject* parent)
       m_today(QDate::currentDate()),
       m_selected(m_today)
 {
+    m_noteSaveTimer.setSingleShot(true);
+    m_noteSaveTimer.setInterval(400);
+    connect(&m_noteSaveTimer, &QTimer::timeout, this, &TodayModel::flushDayNote);
+    if (QCoreApplication::instance())
+        connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
+                this, &TodayModel::flushDayNote);
     m_days.reserve(kDayStripSize);
     for (int i = 0; i < kDayStripSize; ++i) {
         m_days.append(m_today.addDays(i - kDaysBeforeToday));
     }
     refreshLinesAndSummary();
     loadDayNote(selectedDate());
+}
+
+TodayModel::~TodayModel()
+{
+    flushDayNote();
 }
 
 int TodayModel::rowCount(const QModelIndex& parent) const
@@ -250,26 +262,35 @@ bool TodayModel::loadDayNote(const QString& date)
 
 void TodayModel::setDayNoteText(const QString& text)
 {
-    if (!m_dayNoteId || (text == m_dayNoteText && !m_dayNoteDirty)) {
+    if (!m_dayNoteId || text == m_dayNoteText) {
         return;
     }
     m_dayNoteText = text;
+    emit dayNoteTextChanged();
     if (text == m_savedNoteText) {
+        m_noteSaveTimer.stop();
         m_dayNoteDirty = false;
         setDayNoteError({});
-        emit dayNoteTextChanged();
         return;
     }
     m_dayNoteDirty = true;
+    m_noteSaveTimer.start();
+}
+
+bool TodayModel::flushDayNote()
+{
+    m_noteSaveTimer.stop();
+    if (!m_dayNoteDirty)
+        return true;
     BlockRepository blocks(m_database);
-    if (!blocks.replaceText(m_dayNoteId, text)) {
+    if (!blocks.replaceText(m_dayNoteId, m_dayNoteText)) {
         setDayNoteError(blocks.lastError());
-        return;
+        return false;
     }
     m_dayNoteDirty = false;
-    m_savedNoteText = text;
+    m_savedNoteText = m_dayNoteText;
     setDayNoteError({});
-    emit dayNoteTextChanged();
+    return true;
 }
 
 void TodayModel::selectDate(const QString& date)
@@ -284,11 +305,8 @@ void TodayModel::selectDate(const QString& date)
         return;
     }
 
-    if (m_dayNoteDirty) {
-        setDayNoteText(m_dayNoteText);
-        if (m_dayNoteDirty)
-            return;
-    }
+    if (!flushDayNote())
+        return;
     if (!loadDayNote(normalized)) {
         return;
     }

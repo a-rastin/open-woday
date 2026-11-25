@@ -8,6 +8,7 @@
 #include <QList>
 #include <QModelIndex>
 #include <QString>
+#include <QTimer>
 #include <QVariant>
 #include <QtGlobal>
 
@@ -49,6 +50,7 @@ public:
     Q_ENUM(DayRole)
 
     explicit TodayModel(Database& database, QObject* parent = nullptr);
+    ~TodayModel() override;
 
     int rowCount(const QModelIndex& parent = QModelIndex()) const override;
     QVariant data(const QModelIndex& index,
@@ -67,6 +69,7 @@ public:
     Q_INVOKABLE bool addTask(const QString& title);
     Q_INVOKABLE bool setTaskCompleted(const QString& id, bool completed);
     Q_INVOKABLE void setDayNoteText(const QString& text);
+    Q_INVOKABLE bool flushDayNote();
 
     // Select one of the Day strip's dates. Dates outside the strip are ignored,
     // so the view can only move within the contiguous range around today.
@@ -98,6 +101,7 @@ private:
     QString m_dayNoteError;
     QString m_refreshError;
     bool m_dayNoteDirty = false;
+    QTimer m_noteSaveTimer;
     QVariantList m_lines;
 };
 
