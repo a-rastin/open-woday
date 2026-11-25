@@ -3,7 +3,7 @@
 # Run locally from tests/: qmake6 verify-persistence.pro && make && ./verify-persistence
 TEMPLATE = app
 TARGET = verify-persistence
-QT = core sql
+QT = core gui sql
 LIBS += -lsqlite3
 CONFIG += c++17 console
 CONFIG -= app_bundle

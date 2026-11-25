@@ -18,6 +18,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QEventLoop>
+#include <QGuiApplication>
 #include <QFile>
 #include <QSqlDatabase>
 #include <QSqlDriver>
@@ -163,6 +164,38 @@ int midnightRollover()
         return 1;
     if (!query.exec(QStringLiteral("DROP TRIGGER fail_earliest_save")) || !model.flushDayNote())
         return fail(QStringLiteral("could not save earliest note after simulated failure"));
+    return 0;
+}
+
+int todayClockChecks()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    Database database;
+    if (!database.open())
+        return fail(database.lastError());
+
+    QDateTime now(QDate(2026, 1, 1), QTime(23, 59, 59, 950));
+    TodayModel model(database, nullptr, [&now] { return now; });
+    now = now.addMSecs(100);
+    QEventLoop loop;
+    QTimer::singleShot(250, &loop, &QEventLoop::quit);
+    loop.exec();
+    if (!check(model.selectedDate() == QStringLiteral("2026-01-02"),
+               QStringLiteral("midnight timer did not refresh today")))
+        return 1;
+
+    now = now.addDays(-2);
+    auto* app = qobject_cast<QGuiApplication*>(QCoreApplication::instance());
+    app->applicationStateChanged(Qt::ApplicationInactive);
+    if (!check(model.selectedDate() == QStringLiteral("2026-01-02"),
+               QStringLiteral("inactive state unexpectedly refreshed today")))
+        return 1;
+    app->applicationStateChanged(Qt::ApplicationActive);
+    if (!check(model.selectedDate() == QStringLiteral("2025-12-31"),
+               QStringLiteral("activation did not refresh today after a clock change")))
+        return 1;
     return 0;
 }
 
@@ -3714,7 +3747,8 @@ int overlappingDatabasesKeepIndependentConnections()
 
 int main(int argc, char* argv[])
 {
-    QCoreApplication app(argc, argv);
+    qputenv("QT_QPA_PLATFORM", "offscreen");
+    QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("open-woday"));
 
     // Work in a fresh app-data location so the round trip is independent of any
@@ -3806,6 +3840,9 @@ int main(int argc, char* argv[])
     }
 
     if (midnightRollover() != 0) {
+        return 1;
+    }
+    if (todayClockChecks() != 0) {
         return 1;
     }
     if (debouncedDayNoteWrites() != 0) {

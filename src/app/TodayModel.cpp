@@ -7,6 +7,7 @@
 #include <QLocale>
 #include <QDateTime>
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QTimeZone>
 #include <utility>
 
@@ -54,7 +55,15 @@ TodayModel::TodayModel(Database& database, QObject* parent,
     refreshLinesAndSummary();
     loadDayNote(selectedDate());
     m_midnightTimer.setSingleShot(true);
+    m_midnightTimer.setTimerType(Qt::PreciseTimer);
     connect(&m_midnightTimer, &QTimer::timeout, this, &TodayModel::updateToday);
+    if (auto* app = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+        connect(app, &QGuiApplication::applicationStateChanged, this,
+                [this](Qt::ApplicationState state) {
+                    if (state == Qt::ApplicationActive)
+                        updateToday();
+                });
+    }
     scheduleMidnight();
 }
 
@@ -62,7 +71,8 @@ void TodayModel::scheduleMidnight()
 {
     const QDateTime now = m_clock();
     const QDateTime midnight = now.date().addDays(1).startOfDay(now.timeZone());
-    m_midnightTimer.start(static_cast<int>(qMax<qint64>(1, now.msecsTo(midnight))));
+    m_midnightTimer.start(static_cast<int>(
+        qBound(qint64(1), now.msecsTo(midnight), qint64(60000))));
 }
 
 void TodayModel::updateToday()
