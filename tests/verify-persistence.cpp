@@ -1574,6 +1574,214 @@ int blockUpdatesSurviveRestart()
     return 0;
 }
 
+// Code-review finding on update(): an ordinary update writes only a Block's
+// content columns, so a stale read or a cross-Item value carried in the Block
+// can never re-own the row or break the contiguous per-Item ordering. This
+// attempts both an owner change and a position change through update(), checks
+// that the content still updates while owner, position and order stay intact,
+// shows that reorder() is the route for a real position change, and verifies
+// the result across a restart.
+int blockUpdatePreservesOwnerAndPosition()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0) {
+        return 1;
+    }
+
+    const QStringList contents = { QStringLiteral("Line A"),
+                                   QStringLiteral("Line B"),
+                                   QStringLiteral("Line C") };
+    const QString ownerAttemptContent = QStringLiteral("Owner attempt");
+    const QString positionAttemptContent = QStringLiteral("Position attempt");
+    const QString contentOnlyText = QStringLiteral("Content-only edit");
+
+    qlonglong noteAId = 0;
+    qlonglong noteBId = 0;
+    QList<qlonglong> ids;
+    QList<qlonglong> expectedOrder; // the order after reorder(), for the restart
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be opened on first launch: %1")
+                            .arg(database.lastError()));
+        }
+        ItemRepository items(database);
+
+        Item noteA;
+        noteA.kind = QStringLiteral("note");
+        noteA.title = QStringLiteral("Tuesday");
+        const std::optional<Item> createdA = items.create(noteA);
+        if (!createdA) {
+            return fail(QStringLiteral("the first Note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteAId = createdA->id;
+
+        Item noteB;
+        noteB.kind = QStringLiteral("note");
+        noteB.title = QStringLiteral("Wednesday");
+        const std::optional<Item> createdB = items.create(noteB);
+        if (!createdB) {
+            return fail(QStringLiteral("the second Note could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        noteBId = createdB->id;
+
+        BlockRepository blocks(database);
+        for (const QString& content : contents) {
+            Block block;
+            block.itemId = noteAId;
+            block.type = QStringLiteral("text");
+            block.content = content;
+            const std::optional<Block> created = blocks.create(block);
+            if (!created) {
+                return fail(QStringLiteral("a Block could not be created: %1")
+                                .arg(blocks.lastError()));
+            }
+            ids.append(created->id);
+        }
+
+        // One real Block in the other Note, so the cross-Item owner value below
+        // points at an existing Item rather than an invalid foreign key.
+        Block other;
+        other.itemId = noteBId;
+        other.type = QStringLiteral("text");
+        other.content = QStringLiteral("A line in the other Note");
+        if (!blocks.create(other)) {
+            return fail(QStringLiteral(
+                            "the other Note's Block could not be created: %1")
+                            .arg(blocks.lastError()));
+        }
+
+        const QList<Block> current = blocks.readByItem(noteAId);
+        if (!check(current.size() == 3,
+                   QStringLiteral("the Note's Blocks could not be read"))) {
+            return 1;
+        }
+
+        // (1) Attempt to re-own a Block: the caller's itemId names the other
+        // Note. update() must keep the stored owner and position.
+        Block ownerAttempt = current.at(1);
+        ownerAttempt.itemId = noteBId;
+        ownerAttempt.content = ownerAttemptContent;
+        if (!blocks.update(ownerAttempt)) {
+            return fail(QStringLiteral(
+                            "the owner-change update could not be applied: %1")
+                            .arg(blocks.lastError()));
+        }
+
+        // (2) Attempt to reposition a Block: a stale, arbitrary position that
+        // would collide with the first Block. update() must keep position 2.
+        Block positionAttempt = current.at(2);
+        positionAttempt.position = 0;
+        positionAttempt.content = positionAttemptContent;
+        if (!blocks.update(positionAttempt)) {
+            return fail(QStringLiteral(
+                            "the position-change update could not be applied: %1")
+                            .arg(blocks.lastError()));
+        }
+
+        // (3) A content-only Block (owner/position left at their defaults) also
+        // updates without disturbing the stored owner or position.
+        Block contentOnly;
+        contentOnly.id = ids.at(0);
+        contentOnly.type = QStringLiteral("text");
+        contentOnly.content = contentOnlyText;
+        if (!blocks.update(contentOnly)) {
+            return fail(QStringLiteral(
+                            "the content-only update could not be applied: %1")
+                            .arg(blocks.lastError()));
+        }
+
+        // Before the restart: content edits landed, but owner, positions and
+        // contiguous ordering are unchanged; the other Note is untouched.
+        const QList<Block> after = blocks.readByItem(noteAId);
+        if (!check(after.size() == 3,
+                   QStringLiteral("update changed the number of Blocks"))) {
+            return 1;
+        }
+        for (int i = 0; i < after.size(); ++i) {
+            if (!check(after.at(i).id == ids.at(i)
+                           && after.at(i).position == i
+                           && after.at(i).itemId == noteAId,
+                       QStringLiteral(
+                           "update changed a Block's owner or position"))) {
+                return 1;
+            }
+        }
+        if (!check(after.at(0).content == contentOnlyText
+                       && after.at(1).content == ownerAttemptContent
+                       && after.at(2).content == positionAttemptContent,
+                   QStringLiteral("update did not write the content edits"))) {
+            return 1;
+        }
+        const QList<Block> otherAfter = blocks.readByItem(noteBId);
+        if (!check(otherAfter.size() == 1
+                       && otherAfter.first().itemId == noteBId
+                       && otherAfter.first().position == 0,
+                   QStringLiteral(
+                       "a cross-Item update disturbed the other Note"))) {
+            return 1;
+        }
+
+        // A real position change goes through reorder(), which keeps positions
+        // contiguous from 0 instead of being smuggled through update().
+        expectedOrder = { ids.at(2), ids.at(0), ids.at(1) };
+        if (!blocks.reorder(noteAId, expectedOrder)) {
+            return fail(QStringLiteral("the Blocks could not be reordered: %1")
+                            .arg(blocks.lastError()));
+        }
+        const QList<Block> reordered = blocks.readByItem(noteAId);
+        if (!check(reordered.size() == 3
+                       && reordered.at(0).id == expectedOrder.at(0)
+                       && reordered.at(0).position == 0
+                       && reordered.at(1).id == expectedOrder.at(1)
+                       && reordered.at(1).position == 1
+                       && reordered.at(2).id == expectedOrder.at(2)
+                       && reordered.at(2).position == 2,
+                   QStringLiteral("reorder() did not re-sequence positions"))) {
+            return 1;
+        }
+    }
+
+    {
+        Database database;
+        if (!database.open()) {
+            return fail(QStringLiteral(
+                            "the database could not be reopened after the "
+                            "restart: %1")
+                            .arg(database.lastError()));
+        }
+        BlockRepository blocks(database);
+
+        const QList<Block> read = blocks.readByItem(noteAId);
+        if (!check(read.size() == expectedOrder.size(),
+                   QStringLiteral(
+                       "the reordered Blocks did not survive the restart"))) {
+            return 1;
+        }
+        for (int i = 0; i < expectedOrder.size(); ++i) {
+            if (!check(read.at(i).id == expectedOrder.at(i)
+                           && read.at(i).position == i
+                           && read.at(i).itemId == noteAId,
+                       QStringLiteral(
+                           "owner or position changed across the restart"))) {
+                return 1;
+            }
+        }
+        const QList<Block> other = blocks.readByItem(noteBId);
+        if (!check(other.size() == 1 && other.first().itemId == noteBId
+                       && other.first().position == 0,
+                   QStringLiteral(
+                       "the other Note's Block was disturbed across the restart"))) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 // Issue 04, slice 4: deleting a Block re-sequences the positions of the
 // Blocks that remain, and the resulting order survives a restart. Deleting an
 // absent Block reports a clear error and leaves the other Blocks untouched.
@@ -2728,6 +2936,9 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (blockUpdatesSurviveRestart() != 0) {
+        return 1;
+    }
+    if (blockUpdatePreservesOwnerAndPosition() != 0) {
         return 1;
     }
     if (blockDeletionResequencesAndSurvivesRestart() != 0) {

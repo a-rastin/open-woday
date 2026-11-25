@@ -288,12 +288,16 @@ bool BlockRepository::update(const Block& block)
 {
     m_error.clear();
 
+    // Only the editable content columns are written. item_id and position are
+    // deliberately left untouched: they belong to create / remove / reorder,
+    // and copying them from a possibly stale or cross-Item Block here would
+    // re-own the row or leave gaps/duplicates in the owning Item's contiguous
+    // positions. The itemId / position carried by the Block are therefore
+    // ignored, and the stored owner and position always survive the write.
     QSqlQuery query(m_database.connection());
     query.prepare(QStringLiteral(
-        "UPDATE blocks SET item_id = ?, position = ?, type = ?, content = ?, "
-        "inline_json = ?, task_id = ?, indent = ? WHERE id = ?"));
-    query.addBindValue(block.itemId);
-    query.addBindValue(block.position);
+        "UPDATE blocks SET type = ?, content = ?, inline_json = ?, "
+        "task_id = ?, indent = ? WHERE id = ?"));
     query.addBindValue(block.type);
     query.addBindValue(block.content.isNull() ? QStringLiteral("")
                                               : block.content);

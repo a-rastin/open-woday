@@ -56,8 +56,13 @@ public:
     // remain in its owning Item. Returns false and sets lastError() on failure.
     bool remove(qlonglong id);
 
-    // Write every stored column of an existing Block, identified by its id.
-    // Positions are managed by create / remove / reorder instead.
+    // Write the editable content columns of an existing Block, identified by
+    // its id. The stored owner (item_id) and position are preserved: update()
+    // ignores the itemId / position carried by the Block, so a stale read or a
+    // cross-Item value cannot re-own a Block or break the contiguous per-Item
+    // ordering. Change a Block's position with reorder(); moving a Block
+    // between Items would need a dedicated transactional operation that
+    // re-sequences both Items (not provided, as no caller needs it yet).
     // Returns false and sets lastError() on failure.
     bool update(const Block& block);
 
