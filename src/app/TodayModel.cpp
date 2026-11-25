@@ -136,6 +136,11 @@ QString TodayModel::dayNoteText() const
     return m_dayNoteText;
 }
 
+bool TodayModel::dayNoteEditable() const
+{
+    return m_dayNoteEditable;
+}
+
 QString TodayModel::dayNoteError() const
 {
     return m_dayNoteError;
@@ -248,21 +253,28 @@ bool TodayModel::loadDayNote(const QString& date)
         return false;
     }
     QStringList lines;
+    bool editable = true;
     for (const Block& block : stored) {
         lines.append(block.content);
+        editable = editable && BlockRepository::isPlainText(block);
     }
     m_dayNoteId = id;
     m_dayNoteText = lines.join(QLatin1Char('\n'));
     m_savedNoteText = m_dayNoteText;
     m_dayNoteDirty = false;
-    setDayNoteError({});
+    if (m_dayNoteEditable != editable) {
+        m_dayNoteEditable = editable;
+        emit dayNoteEditableChanged();
+    }
+    setDayNoteError(editable ? QString() : QStringLiteral(
+        "This note contains formatted blocks and is read-only in the plain-text editor."));
     emit dayNoteTextChanged();
     return true;
 }
 
 void TodayModel::setDayNoteText(const QString& text)
 {
-    if (!m_dayNoteId || text == m_dayNoteText) {
+    if (!m_dayNoteEditable || !m_dayNoteId || text == m_dayNoteText) {
         return;
     }
     m_dayNoteText = text;
@@ -305,8 +317,12 @@ void TodayModel::selectDate(const QString& date)
         return;
     }
 
-    if (!flushDayNote())
+    if (!flushDayNote()) {
+        setDayNoteError(QStringLiteral(
+            "Cannot change date because the Day note could not be saved. "
+            "Your changes are still here; try again. %1").arg(m_dayNoteError));
         return;
+    }
     if (!loadDayNote(normalized)) {
         return;
     }

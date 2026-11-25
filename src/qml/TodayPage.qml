@@ -151,6 +151,7 @@ Item {
             textFormat: TextEdit.PlainText
             wrapMode: TextEdit.Wrap
             selectByMouse: true
+            readOnly: !todayModel.dayNoteEditable
             text: todayModel.dayNoteText
             Accessible.name: qsTr("Day note")
             onCursorRectangleChanged: {

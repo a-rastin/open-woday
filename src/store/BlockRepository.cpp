@@ -321,6 +321,12 @@ bool BlockRepository::update(const Block& block)
     return true;
 }
 
+bool BlockRepository::isPlainText(const Block& block)
+{
+    return block.type == QStringLiteral("text") && !block.inlineJson
+        && !block.taskId && block.indent == 0;
+}
+
 bool BlockRepository::replaceText(qlonglong itemId, const QString& text)
 {
     m_error.clear();
@@ -336,8 +342,7 @@ bool BlockRepository::replaceText(qlonglong itemId, const QString& text)
         return false;
     }
     for (const Block& block : existing) {
-        if (block.type != QStringLiteral("text") || block.inlineJson
-            || block.taskId || block.indent != 0) {
+        if (!isPlainText(block)) {
             fail(QStringLiteral("This note contains formatted blocks that cannot be edited in the plain-text editor."));
             db.rollback();
             return false;

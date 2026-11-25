@@ -33,6 +33,7 @@ class TodayModel : public QAbstractListModel
     Q_PROPERTY(int taskCount READ taskCount NOTIFY summaryChanged)
     Q_PROPERTY(int eventCount READ eventCount NOTIFY summaryChanged)
     Q_PROPERTY(QString dayNoteText READ dayNoteText NOTIFY dayNoteTextChanged)
+    Q_PROPERTY(bool dayNoteEditable READ dayNoteEditable NOTIFY dayNoteEditableChanged)
     Q_PROPERTY(QString dayNoteError READ dayNoteError NOTIFY dayNoteErrorChanged)
     Q_PROPERTY(QString refreshError READ refreshError NOTIFY refreshErrorChanged)
     Q_PROPERTY(QVariantList lines READ lines NOTIFY linesChanged)
@@ -63,6 +64,7 @@ public:
     int taskCount() const;
     int eventCount() const;
     QString dayNoteText() const;
+    bool dayNoteEditable() const;
     QString dayNoteError() const;
     QString refreshError() const;
     QVariantList lines() const;
@@ -79,6 +81,7 @@ signals:
     void selectedDateChanged();
     void summaryChanged();
     void dayNoteTextChanged();
+    void dayNoteEditableChanged();
     void dayNoteErrorChanged();
     void refreshErrorChanged();
     void linesChanged();
@@ -101,6 +104,7 @@ private:
     QString m_dayNoteError;
     QString m_refreshError;
     bool m_dayNoteDirty = false;
+    bool m_dayNoteEditable = false;
     QTimer m_noteSaveTimer;
     QVariantList m_lines;
 };

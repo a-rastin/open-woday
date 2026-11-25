@@ -67,6 +67,7 @@ public:
     bool update(const Block& block);
 
     // Replace a Note's plain-text Blocks atomically, preserving empty lines.
+    static bool isPlainText(const Block& block);
     bool replaceText(qlonglong itemId, const QString& text);
 
 private:

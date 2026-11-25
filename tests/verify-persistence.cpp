@@ -516,14 +516,58 @@ int richNoteEditIsSafe()
     if (!stored)
         return fail(blocks.lastError());
     TodayModel model(database);
+    if (!check(!model.property("dayNoteEditable").toBool()
+                   && !model.dayNoteError().isEmpty(),
+               QStringLiteral("formatted Day note was not marked read-only")))
+        return 1;
     model.setDayNoteText(QStringLiteral("Changed"));
     model.selectDate(QDate::currentDate().addDays(1).toString(Qt::ISODate));
     const auto after = blocks.readById(stored->id);
     if (!check(after && after->type == heading.type && after->content == heading.content
-                   && model.selectedDate() == *note.day
-                   && model.dayNoteText() == QStringLiteral("Changed")
-                   && !model.dayNoteError().isEmpty(),
-               QStringLiteral("rich note or failed edit was lost")))
+                   && model.selectedDate() != *note.day
+                   && model.dayNoteText().isEmpty()
+                   && model.property("dayNoteEditable").toBool(),
+               QStringLiteral("formatted note blocked navigation or was changed")))
+        return 1;
+    model.selectDate(*note.day);
+    if (!check(!model.property("dayNoteEditable").toBool()
+                   && model.dayNoteText() == heading.content,
+               QStringLiteral("formatted note did not return to read-only")))
+        return 1;
+    return 0;
+}
+
+int dayNoteSaveFailureBlocksNavigationWithExplanation()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    Database database;
+    if (!database.open())
+        return fail(database.lastError());
+    TodayModel model(database);
+    const QString today = model.selectedDate();
+    const QString tomorrow = QDate::currentDate().addDays(1).toString(Qt::ISODate);
+    QSqlQuery query(database.connection());
+    if (!query.exec(QStringLiteral(
+            "CREATE TRIGGER reject_note BEFORE INSERT ON blocks "
+            "BEGIN SELECT RAISE(FAIL, 'temporary failure'); END")))
+        return fail(QStringLiteral("could not create save failure fixture"));
+    model.setDayNoteText(QStringLiteral("Unsaved"));
+    model.selectDate(tomorrow);
+    if (!check(model.selectedDate() == today
+                   && model.dayNoteText() == QStringLiteral("Unsaved")
+                   && model.dayNoteError().contains(QStringLiteral("Cannot change date"))
+                   && model.dayNoteError().contains(QStringLiteral("temporary failure")),
+               QStringLiteral("failed save did not explain refused navigation")))
+        return 1;
+    if (!query.exec(QStringLiteral("DROP TRIGGER reject_note")))
+        return fail(QStringLiteral("could not remove save failure fixture"));
+    model.selectDate(tomorrow);
+    model.selectDate(today);
+    if (!check(model.dayNoteText() == QStringLiteral("Unsaved")
+                   && model.dayNoteError().isEmpty(),
+               QStringLiteral("retry did not save the Day note")))
         return 1;
     return 0;
 }
@@ -3595,6 +3639,9 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (richNoteEditIsSafe() != 0) {
+        return 1;
+    }
+    if (dayNoteSaveFailureBlocksNavigationWithExplanation() != 0) {
         return 1;
     }
     if (dayNoteWritingSurvivesRestart() != 0) {
