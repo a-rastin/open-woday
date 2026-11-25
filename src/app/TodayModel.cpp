@@ -70,14 +70,40 @@ void TodayModel::updateToday()
     const QDate today = m_clock().date();
     if (today != m_today) {
         const bool followToday = m_selected == m_today;
+        const QDate first = today.addDays(-kDaysBeforeToday);
+        const QDate last = first.addDays(kDayStripSize - 1);
+        const bool outside = m_selected < first || m_selected > last;
+        bool selectionChanged = false;
+        if (followToday || outside) {
+            const QDate target = followToday ? today
+                : (m_selected < first ? first : last);
+            if (flushDayNote() && loadDayNote(isoDate(target))) {
+                m_selected = target;
+                selectionChanged = true;
+            } else if (m_dayNoteDirty) {
+                setDayNoteError(QStringLiteral(
+                    "Cannot change date because the Day note could not be saved. "
+                    "Your changes are still here; try again. %1").arg(m_dayNoteError));
+            }
+        }
+
+        // If saving or loading the replacement failed, keep a contiguous strip
+        // containing the still-open note instead of leaving it unreachable.
+        QDate stripFirst = first;
+        if (m_selected < first)
+            stripFirst = m_selected;
+        else if (m_selected > last)
+            stripFirst = m_selected.addDays(1 - kDayStripSize);
         beginResetModel();
         m_today = today;
         m_days.clear();
         for (int i = 0; i < kDayStripSize; ++i)
-            m_days.append(m_today.addDays(i - kDaysBeforeToday));
+            m_days.append(stripFirst.addDays(i));
         endResetModel();
-        if (followToday)
-            selectDate(isoDate(today));
+        if (selectionChanged) {
+            emit selectedDateChanged();
+            refreshLinesAndSummary();
+        }
     }
     scheduleMidnight();
 }

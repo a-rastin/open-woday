@@ -126,6 +126,43 @@ int midnightRollover()
         return 1;
     if (!query.exec(QStringLiteral("DROP TRIGGER fail_midnight_save")) || !model.flushDayNote())
         return fail(QStringLiteral("could not save note after simulated failure"));
+
+    const QString earliest = model.data(model.index(0), TodayModel::DateRole).toString();
+    model.selectDate(earliest);
+    const auto earliestNote = items.readByDay(earliest).first();
+    model.setDayNoteText(QStringLiteral("earliest note"));
+    now = now.addDays(1);
+    QMetaObject::invokeMethod(&model, "updateToday");
+    const auto earliestSaved = blocks.readByItem(earliestNote.id);
+    bool selectedVisible = false;
+    for (int i = 0; i < model.rowCount(); ++i)
+        selectedVisible |= model.data(model.index(i), TodayModel::IsSelectedRole).toBool();
+    if (!check(selectedVisible && model.selectedDate() != earliest
+               && earliestSaved.size() == 1
+               && earliestSaved.first().content == QStringLiteral("earliest note"),
+               QStringLiteral("midnight stranded the earliest selection or did not save its note")))
+        return 1;
+
+    const QString failingDate = model.data(model.index(0), TodayModel::DateRole).toString();
+    model.selectDate(failingDate);
+    model.setDayNoteText(QStringLiteral("unsaved earliest note"));
+    if (!query.exec(QStringLiteral(
+            "CREATE TEMP TRIGGER fail_earliest_save BEFORE UPDATE ON blocks "
+            "BEGIN SELECT RAISE(FAIL, 'save failed'); END")))
+        return fail(query.lastError().text());
+    now = now.addDays(1);
+    QMetaObject::invokeMethod(&model, "updateToday");
+    selectedVisible = false;
+    for (int i = 0; i < model.rowCount(); ++i)
+        selectedVisible |= model.data(model.index(i), TodayModel::IsSelectedRole).toBool()
+            && model.data(model.index(i), TodayModel::DateRole).toString() == failingDate;
+    if (!check(selectedVisible && model.selectedDate() == failingDate
+               && model.dayNoteText() == QStringLiteral("unsaved earliest note")
+               && !model.dayNoteError().isEmpty(),
+               QStringLiteral("failed earliest save stranded or lost the selected note")))
+        return 1;
+    if (!query.exec(QStringLiteral("DROP TRIGGER fail_earliest_save")) || !model.flushDayNote())
+        return fail(QStringLiteral("could not save earliest note after simulated failure"));
     return 0;
 }
 
