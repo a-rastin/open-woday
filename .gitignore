@@ -11,3 +11,4 @@ qrc_*.cpp
 # Built binaries (Linux)
 /open-woday
 /tests/verify-persistence
+/tests/verify-app-shell

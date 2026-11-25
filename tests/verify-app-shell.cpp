@@ -423,12 +423,85 @@ int main(int argc, char *argv[])
                          rightRailRestoredImage.width() - 11, 10, sidebar),
            "the TopBar spans the frame as the RightRail returns");
 
+    // Issue 06 — the Phase 3 merge gate at the single build-and-launch seam.
+    // After the whole resize cycle the window is widened back to the normal
+    // launch size: the complete three-panel frame must return in the shared
+    // visual language, and closing the launched window must exit cleanly. No
+    // new harness, framework or tooling layer is introduced for this check.
+    bool mergeGateFrameSwapped = false;
+    const QImage mergeGateImage = grabWindowAtSize(
+        window, QSize(800, 600), mergeGateFrameSwapped);
+    check(mergeGateFrameSwapped,
+          "the merge gate completes a rendered frame at the normal launch size");
+    check(mergeGateImage.size() == QSize(800, 600),
+          "the merge gate ends at the normal launch size");
+
+    const std::vector<PanelRun> mergeGateRuns =
+        findPanelRuns(mergeGateImage, mergeGateImage.height() / 2, true);
+    check(mergeGateRuns.size() == 2,
+          "the merge gate shows the centre panel and the RightRail");
+    check(isColor(mergeGateImage, 10, mergeGateImage.height() / 2, sidebar),
+          "the merge gate shows the dark Sidebar");
+    check(isColor(mergeGateImage, 10, 10, sidebar)
+              && isColor(mergeGateImage, mergeGateImage.width() - 11, 10,
+                         sidebar),
+          "the TopBar spans the frame at the merge gate");
+
+    if (mergeGateRuns.size() == 2) {
+        const PanelRun gateCentre = mergeGateRuns.at(0);
+        const PanelRun gateRail = mergeGateRuns.at(1);
+
+        check(gateCentre.start >= gap
+                  && gateRail.end + gap == mergeGateImage.width() - 1,
+              "both panels keep the shared inset at the merge gate");
+        check(gateRail.start - gateCentre.end - 1 == gap,
+              "the panels keep the shared panel gap at the merge gate");
+        check(hasUniformMargin(mergeGateImage, gateCentre.start - gap,
+                               gateCentre.start - 1,
+                               mergeGateImage.height() / 2, true, canvas),
+              "the dark canvas separates the Sidebar from the centre panel at "
+              "the merge gate");
+
+        int gateTop = -1;
+        int gateBottom = -1;
+        const bool gateExtent = findPanelExtent(
+            mergeGateImage, mergeGateImage.width() / 2, false, gateTop,
+            gateBottom);
+        check(gateExtent,
+              "the centre panel is visible beneath the TopBar at the merge gate");
+        if (gateExtent) {
+            check(hasRoundedCorners(
+                      mergeGateImage,
+                      QRect(gateCentre.start, gateTop,
+                            gateCentre.end - gateCentre.start + 1,
+                            gateBottom - gateTop + 1),
+                      radius),
+                  "the centre panel keeps the shared rounded corners at the "
+                  "merge gate");
+            check(isCleanPanel(
+                      mergeGateImage,
+                      QRect(gateCentre.start + radius + 1, gateTop + radius + 1,
+                            gateCentre.end - gateCentre.start - 2 * radius - 1,
+                            gateBottom - gateTop - 2 * radius - 1)),
+                  "the merge gate renders no live Item data or placeholder");
+        }
+    }
+
+    window->close();
+    QCoreApplication::processEvents();
+    check(!window->isVisible(), "closing the launched window exits cleanly");
+
     if (failures != 0) {
         std::fprintf(stderr, "%d app-shell appearance check(s) failed\n",
                      failures);
         return 1;
     }
 
-    std::printf("All app-shell appearance checks passed\n");
+    std::printf("verify-app-shell: PASS - the Phase 3 merge gate holds: one "
+                "natively decorated window shows the dark Sidebar, spanning "
+                "TopBar, white rounded centre panel and white rounded "
+                "RightRail on the dark canvas; resizing folds the Sidebar "
+                "first and the RightRail second, widening restores the frame, "
+                "and closing the window exits cleanly\n");
     return 0;
 }
