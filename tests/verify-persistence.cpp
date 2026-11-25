@@ -466,9 +466,9 @@ int todayQueriesOnlySelectedDay()
             item.deletedAt = QStringLiteral("2026-01-01T00:00:00Z");
         return items.create(item);
     };
-    const auto taskTime = create(QStringLiteral("task"), day + QStringLiteral("T23:59:59Z"), 2);
+    const auto taskTime = create(QStringLiteral("task"), day + QStringLiteral("T23:59:59"), 2);
     const auto taskDay = create(QStringLiteral("task"), day, 1);
-    const auto eventTime = create(QStringLiteral("event"), day + QStringLiteral("T00:00:00+02:00"), 2);
+    const auto eventTime = create(QStringLiteral("event"), day + QStringLiteral("T00:00:00"), 2);
     const auto eventDay = create(QStringLiteral("event"), day, 1);
     if (!taskTime || !taskDay || !eventTime || !eventDay
         || !create(QStringLiteral("task"), next, 0)
@@ -496,6 +496,43 @@ int todayQueriesOnlySelectedDay()
     model.selectDate(next);
     if (!check(model.taskCount() == 1 && model.eventCount() == 1 && model.lines().size() == 2,
                QStringLiteral("Today did not refresh for the newly selected day")))
+        return 1;
+
+    // These instants belong to today locally, but are written on adjacent days.
+    const QDateTime early(QDate::currentDate(), QTime(0, 30));
+    const QDateTime late(QDate::currentDate(), QTime(23, 30));
+    const QString previousWritten = early.toOffsetFromUtc(early.offsetFromUtc() - 3600)
+                                        .toString(Qt::ISODate);
+    const QString nextWritten = late.toOffsetFromUtc(late.offsetFromUtc() + 3600)
+                                    .toString(Qt::ISODate);
+    const auto shiftedTask = create(QStringLiteral("task"), previousWritten, 3);
+    const auto shiftedEvent = create(QStringLiteral("event"), nextWritten, 3);
+    const QDateTime nextEarly(QDate::currentDate().addDays(1), QTime(0, 30));
+    const QString misleading = nextEarly.toOffsetFromUtc(nextEarly.offsetFromUtc() - 3600)
+                                   .toString(Qt::ISODateWithMs);
+    const auto nextTask = create(QStringLiteral("task"), misleading, 4);
+    const auto invalidEvent = create(QStringLiteral("event"), day + QStringLiteral("Tbad"), 4);
+    const auto utcTask = create(QStringLiteral("task"), early.toUTC().toString(Qt::ISODate), 5);
+    if (!shiftedTask || !shiftedEvent || !nextTask || !invalidEvent || !utcTask)
+        return fail(items.lastError());
+    const auto hasId = [](const QList<Item>& rows, qlonglong id) {
+        for (const Item& row : rows)
+            if (row.id == id)
+                return true;
+        return false;
+    };
+    if (!check(hasId(items.readTasksDueOn(day), shiftedTask->id)
+                   && hasId(items.readEventsStartingOn(day), shiftedEvent->id)
+                   && hasId(items.readTasksDueOn(day), utcTask->id)
+                   && !hasId(items.readTasksDueOn(day), nextTask->id)
+                   && hasId(items.readTasksDueOn(next), nextTask->id)
+                   && !hasId(items.readEventsStartingOn(day), invalidEvent->id)
+                   && !hasId(items.readEventsStartingOn(next), shiftedEvent->id),
+               QStringLiteral("offset timestamps were not matched to their local day")))
+        return 1;
+    model.selectDate(day);
+    if (!check(model.taskCount() == 4 && model.eventCount() == 3,
+               QStringLiteral("Today did not show offset timestamps on their local day")))
         return 1;
     return 0;
 }
