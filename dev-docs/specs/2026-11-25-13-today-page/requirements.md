@@ -46,8 +46,8 @@ with no calendar grid. All strings and assets are original and the page inherits
 the Phase 3 token set, native chrome and platform-correct modifiers. The
 increment is proven through a single high-level seam: launch, see Today with the
 day's lines and Day note, write, restart, and see the same data rendered
-unchanged — executed on a GPU-backed Google Colab runtime via
-`scripts/colab-gpu-test.sh`.
+unchanged — executed locally with the repository's `qmake6` / `make` test
+commands.
 
 ## Context
 
@@ -87,14 +87,10 @@ unchanged — executed on a GPU-backed Google Colab runtime via
   is **not** installed. The build stays `qmake6 open-woday.pro && make`; the
   `sql` module was declared up front in Phase 1.
 - **Test-execution rule (`AGENTS.md`; `tech-stack.md` §12).** Every run of the
-  verification suite **must** be on a GPU from Google Colab using `colab-cli`.
-  `scripts/colab-gpu-test.sh` is the single supported route (`colab new --gpu`
-  → `colab upload` → `colab exec` → `colab stop`), with
-  `tests/colab_gpu_verify.py` proving a usable NVIDIA GPU before building and
-  running `verify-persistence`. A local, CPU-only or non-GPU run is **not** a
-  valid verification. `colab-cli` authentication is a prerequisite; when a
-  specific Google account is required, `COLAB_EXPECTED_EMAIL` blocks GPU
-  allocation on a mismatch.
+  verification suite happens on the developer's machine. From `tests/`, run
+  `qmake6 verify-persistence.pro && make -j"$(nproc)" && ./verify-persistence`.
+  The build and executable must both exit zero; no remote runtime, Google
+  account or GPU is required.
 - **Spec authority (`mission.md` §6, ADR-0004).** The three in-app `screenshots/`
   are the visual source of truth; `dev-docs/app-document.md` (the 134 guides) is
   the behavioural source; `dev-docs/DESIGN.md` is the marketing site's reference,
@@ -127,7 +123,7 @@ unchanged — executed on a GPU-backed Google Colab runtime via
 | Only populated pages — no empty shells / disabled placeholders | D5, D12 |
 | Native OS chrome and platform-correct modifiers; inner UI identical across platforms | D15 (`tech-stack.md` §8.5) |
 | Every phase is one runnable / verifiable increment | `roadmap.md` §1 |
-| Verification suite runs on a GPU from Google Colab via `colab-cli` | `AGENTS.md`; `tech-stack.md` §12 |
+| Verification suite runs locally with `qmake6` / `make` | `AGENTS.md`; `tech-stack.md` §12 |
 | No schedule or effort estimates; order by dependency | D7, D9 |
 | Use `GLOSSARY.md` vocabulary; do not re-litigate settled decisions or absorbed ADRs | `mission.md` §3 (principle 9), §13 |
 
@@ -186,7 +182,7 @@ non-demoable horizontal layer.
 32. As a reviewer, I want no webview, network layer, plugin system or scripting engine added, so that ADR-0002 / D3 / D11 hold.
 33. As a reviewer, I want no CMake, no schema rewrite, no new migration and no rework of the build baseline, so that `tech-stack.md` §4 / §7.2 / §11 hold.
 34. As a reviewer, I want no new unit-test framework or low-level seams, so that the single-seam rule (`tech-stack.md` §12) is kept.
-35. As a reviewer, I want the verification suite run on a GPU from Google Colab through `scripts/colab-gpu-test.sh`, so that the mandatory test-execution rule is honoured.
+35. As a reviewer, I want the verification suite run locally with `qmake6` / `make`, so that the test-execution rule is honoured.
 36. As a reviewer, I want canonical `GLOSSARY.md` vocabulary in identifiers and comments, so that later code stays consistent.
 37. As a reviewer, I want no schedule or effort estimates anywhere in the spec, so that D7 / D9 are respected.
 38. As a maintainer, I want the spec to state plainly that this is a proposal awaiting confirmation, so that no maintainer sign-off is implied.
@@ -246,12 +242,13 @@ Stated in durable terms; concrete file/command targets are in `plan.md` and
   CMake, test framework, CI job, low-level unit seams or packaging script is
   introduced (ADR-0002, D3, `tech-stack.md` §12).
 - **Testing.** The single highest seam (launch → observe Today → write → restart
-  → observe unchanged data), its prior art and the mandatory GPU Colab route are
-  in `validation.md`; the executable seam stays framework-free and is run
-  through `scripts/colab-gpu-test.sh`.
+  → observe unchanged data), its prior art and the local test-execution rule are
+  in `validation.md`; the executable seam stays framework-free and is built and
+  run locally from `tests/` with `qmake6` and `make`.
 - **Documentation.** README / CHANGELOG / roadmap are maintained by the
-  `/bnvt-documentation` step and are intentionally **not modified** in this
-  phase; the full docs are a Phase 12 deliverable.
+  `/bnvt-documentation` step and are not modified by Today-page feature work;
+  the separate local-testing rule amendment updates README / CHANGELOG. The
+  full docs are a Phase 12 deliverable.
 - **Explicit phase boundary.** No full Task CRUD, 5-type editor, to-do→Task
   links, Inbox grouping, Quick Add, CSV export, visual tuning or packaging is
   built here. No settled decision or absorbed ADR is re-litigated; a constitution
@@ -285,9 +282,9 @@ Stated in durable terms; concrete file/command targets are in `plan.md` and
 - Any populated page or disabled placeholder beyond the Today page; any fake
   content ("no empty shells", D5 / D12).
 - A full unit-test framework, CI configuration, low-level unit seams and
-  packaging scripts beyond the single extended persistence seam; a local,
-  CPU-only or non-GPU test run as a substitute for the GPU Colab route.
-- README / CONTRIBUTING / CHANGELOG / roadmap edits; a tagged release.
+  packaging scripts beyond the single extended persistence seam.
+- Feature-driven README / CONTRIBUTING / CHANGELOG / roadmap edits; the
+  separate local-testing rule amendment is excluded. A tagged release.
 - Any schedule or effort estimate (D7 / D9) or settled-decision / ADR
   re-litigation.
 

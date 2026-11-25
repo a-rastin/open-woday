@@ -1,4 +1,4 @@
-# 05: Prove the restart seam on GPU Colab and verify the phase boundary (merge gate)
+# 05: Prove the restart seam locally and verify the phase boundary (merge gate)
 
 **What to build:** A reviewer can confirm Phase 4 is a mergeable, runnable
 increment through the single highest seam: `qmake6 && make` produces the binary;
@@ -7,10 +7,11 @@ summary line and the day's Task/Event lines with check-off; writing free text an
 checking off a Task, then restarting against the same SQLite file, shows the same
 Day note, lines, free writing and completion state rendered again unchanged. The
 one framework-free executable persistence seam is extended to cover the
-Day-note-per-date wiring and Task/Event/Block round-trips and run through the
-mandatory GPU-backed Google Colab route. A clean build, constraint/diff review,
-canonical vocabulary, unedited docs and spec hygiene are confirmed, and no
-out-of-scope item leaked in. The roadmap's "Verifiable when" condition is met.
+Day-note-per-date wiring and Task/Event/Block round-trips and run locally with
+`qmake6` and `make`. A clean build, constraint/diff review, canonical vocabulary,
+unedited feature docs (apart from the local-testing amendment) and spec hygiene
+are confirmed, and no out-of-scope item leaked in. The roadmap's "Verifiable
+when" condition is met.
 
 **Blocked by:** 02: One editable Day note per date, with free writing that persists; 04: Check-off persistence and a live summary (and transitively 01 and 03)
 
@@ -24,12 +25,10 @@ out-of-scope item leaked in. The roadmap's "Verifiable when" condition is met.
       the Day-note-per-date rule and Task/Event/Block round-trips, with no new
       test framework, test doubles, low-level unit seams, UI automation harness
       or CI configuration added; the seam count stays at one.
-- [ ] The extended verification is run through the repository's single supported
-      GPU Colab runner (`scripts/colab-gpu-test.sh`) on a Google Colab GPU
-      runtime: the runner proves a usable NVIDIA GPU, builds and runs the
-      verification and prints `verify-persistence: PASS`, then releases the
-      runtime, exiting zero. A local, CPU-only or non-GPU run does not satisfy
-      this check.
+- [ ] The extended verification is run locally from `tests/` with
+      `qmake6 verify-persistence.pro && make -j"$(nproc)" && ./verify-persistence`;
+      the build and executable exit zero and the executable prints
+      `verify-persistence: PASS`.
 - [ ] The launch → observe Today → write → restart → read-back round trip shows
       the Day note, its free writing, the day's Task/Event lines and check-off
       state rendered and read back unchanged against the same local SQLite file.
@@ -69,7 +68,8 @@ out-of-scope item leaked in. The roadmap's "Verifiable when" condition is met.
       or packaging scripts beyond the single extended persistence seam.
 - [ ] Identifiers and comments use canonical `GLOSSARY.md` vocabulary, with none
       of the `_Avoid_` terms used for domain concepts.
-- [ ] README, CHANGELOG and roadmap are not edited in this phase; the documented
+- [ ] README, CHANGELOG and roadmap are not edited by Today-page feature work,
+      apart from the separate local-testing rule amendment; the documented
       build command still works as written.
 - [ ] The spec contains no schedule or effort estimates, re-litigates no
       settled decision or absorbed ADR, and no maintainer sign-off is

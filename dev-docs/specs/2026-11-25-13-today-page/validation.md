@@ -45,14 +45,11 @@ seam for the shell. Phase 4 reuses both rather than adding new lower ones.
   `tests/verify-persistence.cpp` (built from `tests/verify-persistence.pro`) to
   cover the Day-note-per-date wiring and Task/Event/Block round-trips; keep the
   verification at one seam with no test framework (`tech-stack.md` §12).
-- **Mandatory GPU Colab route.** Run the executable verification through
-  [`scripts/colab-gpu-test.sh`](../../../scripts/colab-gpu-test.sh) on a Google
-  Colab **GPU** runtime (`AGENTS.md`; `tech-stack.md` §12): `colab new --gpu` →
-  `colab upload` → `colab exec` → `colab stop`, with `tests/colab_gpu_verify.py`
-  proving a usable NVIDIA GPU before building and running `verify-persistence`.
-  A local, CPU-only or non-GPU run is **not** a valid verification;
-  `colab-cli` authentication is a prerequisite and `COLAB_EXPECTED_EMAIL` can be
-  required to block GPU allocation on an account mismatch.
+- **Local execution.** Build and run the executable verification on the
+  developer's machine (`AGENTS.md`; `tech-stack.md` §12). From `tests/`, run
+  `qmake6 verify-persistence.pro`, `make -j"$(nproc)"`, then
+  `./verify-persistence`; verification passes only when all commands exit zero.
+  No remote runtime, Google account or GPU is required.
 - **Reviewer confirmation:** if the maintainer expects a different seam (for
   example a committed screenshot-diff harness, a UI automation job or a CI gate
   in this phase), say so before `/bnvt-ticket`; otherwise this single-seam
@@ -92,15 +89,20 @@ seam for the shell. Phase 4 reuses both rather than adding new lower ones.
   and the `meta` schema version.
 - `resources.qrc` embedding, and the set of original strings/icons shipped.
 - **Prior art:** the Phase 1/3 build-and-launch merge-gate checks, Phase 2's
-  framework-free `tests/verify-persistence.cpp` restart seam, the
-  `.code-review/` records for Phases 1–3, and the GPU Colab verification already
-  run end-to-end for the Phase 2 gate (`CHANGELOG.md` §Unreleased).
+  framework-free `tests/verify-persistence.cpp` restart seam, and the
+  `.code-review/` records for Phases 1–3.
 
 ## Validation checks
 
-Run the executable verification through `scripts/colab-gpu-test.sh` on a Google
-Colab GPU. The build commands below describe what is configured, not an
-alternative test route.
+Run the executable verification locally from `tests/`:
+
+```bash
+qmake6 verify-persistence.pro
+make -j"$(nproc)"
+./verify-persistence
+```
+
+The build commands below describe what is configured as part of this phase.
 
 Run on Linux with the checked toolchain (`tech-stack.md` §4): Qt 6.12
 (`Qt6Quick`, `Qt6Widgets`, `Qt6Core`), the SQL/SQLite driver, `qmake6`, `g++`;
@@ -113,10 +115,10 @@ no CMake.
    additional qmake target, no CMake.
 2. **Compile.** `make` exits `0`, produces the `open-woday` binary, with no
    errors and no new compiler warnings.
-3. **GPU Colab verification.** `scripts/colab-gpu-test.sh` exits `0`: the VM
-   driver proves a usable NVIDIA GPU, builds `verify-persistence` and prints
-   `verify-persistence: PASS`; the runtime is released with `colab stop`. A
-   local, CPU-only or non-GPU run does not satisfy this check.
+3. **Local verification.** From `tests/`,
+   `qmake6 verify-persistence.pro && make -j"$(nproc)" && ./verify-persistence`
+   exits `0` and prints `verify-persistence: PASS`. No remote runtime or GPU is
+   required.
 4. **Launch unaffected.** Running the binary still opens the Phase 3
    three-panel frame with native chrome, the dark sidebar, white rounded centre
    and right rail, the Sidebar-then-RightRail fold order and platform-correct
@@ -161,9 +163,10 @@ no CMake.
     - no CMake files;
     - canonical `GLOSSARY.md` vocabulary in identifiers/comments, with none of
       the `_Avoid_` terms used for domain concepts.
-12. **Docs consistency.** README / CHANGELOG / roadmap are **not edited** in
-    this phase; the documented `qmake6 open-woday.pro && make` command still
-    works as written.
+12. **Docs consistency.** Today-page feature work leaves README / CHANGELOG /
+    roadmap unchanged, apart from the separate local-testing rule amendment;
+    the documented `qmake6 open-woday.pro && make` command still works as
+    written.
 13. **Spec hygiene.** No schedule or effort estimates anywhere in the spec (D7 /
     D9); no settled decision or absorbed ADR is re-litigated; the spec is
     recorded as a proposal with maintainer confirmation outstanding (spec
@@ -174,8 +177,8 @@ no CMake.
 Phase 4 can be merged when **all** of the following hold:
 
 1. Every numbered task group in `plan.md` (groups 1–8) is complete.
-2. All validation checks above pass, including `scripts/colab-gpu-test.sh`
-   exiting zero on a GPU-backed Google Colab runtime.
+2. All validation checks above pass, including the local
+   `verify-persistence` build and executable exiting zero.
 3. The "Verifiable when" condition is met: Today renders a day's Task/Event
    lines and the editable Day note persists across restarts.
 4. Constitutional compliance: ADR-0002 (no webview), D3 / D21 (no network,
@@ -183,7 +186,7 @@ Phase 4 can be merged when **all** of the following hold:
    not a new entity, exactly 5 editor types remain Phase 6), D15 (native chrome
    and platform-correct modifiers preserved), ADR-0001 / ADR-0004 (original
    assets & strings), D5 / D12 (no empty shells), D6 / D11 (one codebase, Linux
-   primary), D7 / D9 (no estimates), the GPU Colab verification rule
+   primary), D7 / D9 (no estimates), the local test-execution rule
    (`AGENTS.md` / `tech-stack.md` §12), and `GLOSSARY.md` vocabulary.
 5. The increment is **runnable / verifiable on its own** through the single
    launch → write → restart seam (`roadmap.md` §1) — it must not ship a

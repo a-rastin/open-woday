@@ -178,30 +178,20 @@ and build details.
 
 ## Testing
 
-Per the project's engineering rule (`AGENTS.md` /
-[`dev-docs/tech-stack.md`](dev-docs/tech-stack.md) §12), **tests must be run on
-a GPU from Google Colab using `colab-cli`**. Running `verify-persistence`
-locally, in CI, or on a CPU-only runtime does not satisfy verification.
+Tests run locally on the machine with the Qt 6 SQL/SQLite toolchain installed;
+no Google account, remote runtime or GPU is required.
 
-Install the CLI and complete browser sign-in before running the suite:
+From the repository root:
 
 ```bash
-uv tool install google-colab-cli
-colab whoami
-scripts/colab-gpu-test.sh
+cd tests
+qmake6 verify-persistence.pro
+make -j"$(nproc)"
+./verify-persistence
 ```
 
-Check the email shown by `colab whoami`; the CLI can reuse an existing
-sign-in. Set `COLAB_EXPECTED_EMAIL` to fail before allocation if the CLI uses
-the wrong account. If you use Application Default Credentials, check your
-identity with `colab --auth=adc whoami` and run with `COLAB_AUTH=adc`.
-
-The runner allocates a Colab GPU (T4 by default), uploads the sources, and
-proves CUDA compute works before building and running `verify-persistence`
-on the VM. It releases the runtime with `colab stop`; allocation, GPU proof,
-test, or cleanup failures make the runner exit nonzero. `COLAB_GPU` selects
-the GPU, `COLAB_SESSION` changes the session name, and `COLAB_KEEP=1` leaves
-the runtime running for debugging.
+The suite passes only when all commands exit zero and `verify-persistence` prints
+`verify-persistence: PASS`.
 
 ---
 

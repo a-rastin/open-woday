@@ -111,9 +111,10 @@
    (`tests/verify-persistence.cpp` / `verify-persistence.pro`) to cover the
    Day-note-per-date wiring and Task/Event/Block round-trips; add **no** test
    framework, no low-level unit seams, no test doubles (`tech-stack.md` §12).
-3. Run the verification through `scripts/colab-gpu-test.sh` on a Google Colab
-   **GPU** runtime (`AGENTS.md`; `tech-stack.md` §12). A local, CPU-only or
-   non-GPU run does not satisfy the verification rule.
+3. Run the verification locally from `tests/` with
+   `qmake6 verify-persistence.pro && make -j"$(nproc)" && ./verify-persistence`
+   (`AGENTS.md`; `tech-stack.md` §12). The build and executable must both exit
+   zero.
 
 ## 8. Build, constraint and spec-hygiene verification
 

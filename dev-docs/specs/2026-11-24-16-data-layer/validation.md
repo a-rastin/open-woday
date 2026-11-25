@@ -71,9 +71,15 @@ the codebase.
 
 ## Validation checks
 
-Run the executable verification through [`scripts/colab-gpu-test.sh`](../../../scripts/colab-gpu-test.sh)
-on a Google Colab GPU. The build commands below describe what is configured,
-not an alternative test route.
+Run the executable verification locally from `tests/`:
+
+```bash
+qmake6 verify-persistence.pro
+make -j"$(nproc)"
+./verify-persistence
+```
+
+The build commands below describe what is configured as part of this phase.
 
 Run on Linux with the checked toolchain (`tech-stack.md` §4): Qt 6.12
 (`Qt6Quick`, `Qt6Widgets`, `Qt6Core`), the SQL/SQLite driver, `qmake6`, `g++`;
@@ -134,8 +140,9 @@ no CMake.
     - no CMake files;
     - canonical `GLOSSARY.md` vocabulary in identifiers/comments, with none of the
       `_Avoid_` terms used for domain concepts.
-12. **Docs consistency.** README / CHANGELOG / roadmap are **not edited** in this
-    phase; the documented `qmake6 open-woday.pro && make` command still works as
+12. **Docs consistency.** README / CHANGELOG / roadmap were not edited by the
+    Phase 2 feature work, apart from the later local-testing rule amendment;
+    the documented `qmake6 open-woday.pro && make` command still works as
     written.
 13. **Spec hygiene.** No schedule or effort estimates anywhere in the spec (D7 /
     D9); no settled decision or absorbed ADR is re-litigated.

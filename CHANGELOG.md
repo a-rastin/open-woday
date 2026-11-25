@@ -16,18 +16,6 @@ design-only history.
 
 ### Added
 
-- **Testing rule — GPU Colab verification.** `AGENTS.md` and the constitution
-  (`dev-docs/tech-stack.md` §12) now require every run of the verification
-  suite to happen on a GPU-backed Google Colab VM through `colab-cli`.
-  `scripts/colab-gpu-test.sh` is the single supported route
-  (`colab new --gpu T4` → `colab upload` → `colab exec` → `colab stop`), with
-  `tests/colab_gpu_verify.py` as the VM-side driver: it proves a usable NVIDIA
-  GPU before building and running `tests/verify-persistence`, and otherwise
-  fails loudly. Documented in `README.md`.
-  - **Route verified:** `scripts/colab-gpu-test.sh` ran end-to-end on a T4 GPU
-    runtime (`Tesla T4`, CUDA compute smoke test OK), installed Qt 6.4.2 on the
-    VM, built with `qmake6` and printed `verify-persistence: PASS` from the VM.
-    The runtime was released with `colab stop`; no session was left running.
 - **Phase 1 — project-skeleton: the first runnable increment.** A `qmake6` Qt 6
   Quick / QML + C++ application that configures, compiles and opens a single
   empty window on Linux, with no webview, no network and no persistence.
@@ -82,6 +70,12 @@ design-only history.
 
 ### Changed
 
+- **Testing rule — local verification.** `AGENTS.md` and the constitution
+  (`dev-docs/tech-stack.md` §12) now require every verification run to happen
+  on the developer's machine with `qmake6`, `make` and
+  `tests/verify-persistence`. The GPU Colab runner and VM-side driver were
+  removed; no Google account, remote runtime or GPU is required. Documented in
+  `README.md`.
 - `README.md` was expanded (`9f0db62`) with a project overview, the
   unaffiliated / non-commercial disclaimer, `v0.1` scope, permanent non-goals,
   quick start, planned install/build/configuration, roadmap status, a project
