@@ -16,6 +16,21 @@ QString nowIsoUtc()
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 }
 
+// Date-only values name a calendar day. Timestamps without an offset are
+// local wall times; timestamps with an offset (including Z) name an instant.
+// Invalid values never belong to a day.
+bool fallsOnLocalDay(const std::optional<QString>& value, const QDate& day)
+{
+    if (!value || !day.isValid())
+        return false;
+    if (value->size() == 10) {
+        const QDate date = QDate::fromString(*value, Qt::ISODate);
+        return date.isValid() && date.toString(Qt::ISODate) == *value && date == day;
+    }
+    const QDateTime timestamp = QDateTime::fromString(*value, Qt::ISODate);
+    return timestamp.isValid() && timestamp.toLocalTime().date() == day;
+}
+
 // Nullable-column helpers live in StoreHelpers.h, shared with
 // BlockRepository, so a change to them is made once.
 using store::bindOptional;
@@ -243,6 +258,36 @@ QList<Item> ItemRepository::readByKind(const QString& kind)
                        "ORDER BY sort_order, id")
             .arg(itemColumns()),
         QVariantList{ QVariant(kind) });
+}
+
+QList<Item> ItemRepository::readTasksDueOn(const QString& day)
+{
+    const QList<Item> candidates = select(
+        QStringLiteral("SELECT %1 FROM items "
+                       "WHERE kind = 'task' AND deleted_at IS NULL "
+                       "AND due_at IS NOT NULL ORDER BY sort_order, id")
+            .arg(itemColumns()), {});
+    const QDate selected = QDate::fromString(day, Qt::ISODate);
+    QList<Item> matches;
+    for (const Item& item : candidates)
+        if (fallsOnLocalDay(item.dueAt, selected))
+            matches.append(item);
+    return matches;
+}
+
+QList<Item> ItemRepository::readEventsStartingOn(const QString& day)
+{
+    const QList<Item> candidates = select(
+        QStringLiteral("SELECT %1 FROM items "
+                       "WHERE kind = 'event' AND deleted_at IS NULL "
+                       "AND start_at IS NOT NULL ORDER BY sort_order, id")
+            .arg(itemColumns()), {});
+    const QDate selected = QDate::fromString(day, Qt::ISODate);
+    QList<Item> matches;
+    for (const Item& item : candidates)
+        if (fallsOnLocalDay(item.startAt, selected))
+            matches.append(item);
+    return matches;
 }
 
 QList<Item> ItemRepository::readByDay(const QString& day)

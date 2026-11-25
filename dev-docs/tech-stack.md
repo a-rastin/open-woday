@@ -485,7 +485,16 @@ the former `PLAN.md` §2.3. They are recorded here so nothing is silently assume
   respect the absorbed ADR decisions (`mission.md` §§5, 6, 8; this file §3).
 - **Testing:** test external behaviour, not implementation details; prefer the
   highest seam and existing seams; the fewer seams the better (ideal = one).
-  There are no tests yet — this is greenfield.
+  The one executable seam is the framework-free
+  `tests/verify-persistence.cpp`. Keep verification framework-free; add no test
+  framework, no unit seams and no CI test job (unchanged from the original
+  rule).
+- **Test execution — local rule:** every run of the verification suite happens
+  on the developer's machine. From `tests/`, run
+  `qmake6 verify-persistence.pro && make -j"$(nproc)" && ./verify-persistence`.
+  Verification passes only when the build and executable both exit zero. No
+  remote runtime, Google account or GPU is required. `AGENTS.md` carries the
+  agent-facing rule; `README.md` § Testing documents the command.
 - **No runtime network, no plugin system, no scripting engine, no webview.**
 - **No schedule or effort estimates** (D7, D9); order is by dependency.
 - **Legal hygiene:** never bundle or publish the guide scrape, upstream

@@ -1,7 +1,5 @@
 import QtQuick
 
-// The clean surface later pages render into. It stays empty of product content
-// while establishing the shared panel colour and radius.
 Rectangle {
     id: centrePanel
 
@@ -9,4 +7,10 @@ Rectangle {
 
     color: centrePanel.theme.panel
     radius: centrePanel.theme.radiusPanel
+
+    TodayPage {
+        anchors.fill: parent
+        anchors.margins: centrePanel.theme.gap * 2
+        theme: centrePanel.theme
+    }
 }

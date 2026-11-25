@@ -66,6 +66,10 @@ public:
     // Returns false and sets lastError() on failure.
     bool update(const Block& block);
 
+    // Replace a Note's plain-text Blocks atomically, preserving empty lines.
+    static bool isPlainText(const Block& block);
+    bool replaceText(qlonglong itemId, const QString& text);
+
 private:
     // Execute one fixed SELECT statement with bound values and map every row
     // through blockFromQuery(). No SQL is assembled from Block text.
