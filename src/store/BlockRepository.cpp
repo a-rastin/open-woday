@@ -116,6 +116,7 @@ std::optional<Block> BlockRepository::create(const Block& block)
     if (!db.commit()) {
         fail(QStringLiteral("could not commit creating the Block: %1")
                  .arg(db.lastError().text()));
+        db.rollback();
         return std::nullopt;
     }
 
@@ -218,6 +219,7 @@ bool BlockRepository::reorder(qlonglong itemId,
     if (!db.commit()) {
         fail(QStringLiteral("could not commit the reorder: %1")
                  .arg(db.lastError().text()));
+        db.rollback();
         return false;
     }
     return true;
@@ -279,6 +281,7 @@ bool BlockRepository::remove(qlonglong id)
     if (!db.commit()) {
         fail(QStringLiteral("could not commit deleting Block %1: %2")
                  .arg(id).arg(db.lastError().text()));
+        db.rollback();
         return false;
     }
     return true;

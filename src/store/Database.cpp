@@ -269,6 +269,7 @@ bool Database::applyMigrations(int currentVersion, int* outVersion)
         if (!m_db.commit()) {
             fail(QStringLiteral("could not commit migration %1: %2")
                      .arg(version).arg(m_db.lastError().text()));
+            m_db.rollback();
             return false;
         }
         *outVersion = version;
