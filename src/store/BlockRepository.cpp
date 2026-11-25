@@ -347,8 +347,9 @@ bool BlockRepository::replaceText(qlonglong itemId, const QString& text)
     for (int i = 0; i < lines.size(); ++i) {
         if (i < existing.size()) {
             QSqlQuery update(db);
-            update.prepare(QStringLiteral("UPDATE blocks SET content = ? WHERE id = ?"));
+            update.prepare(QStringLiteral("UPDATE blocks SET content = ?, position = ? WHERE id = ?"));
             update.addBindValue(lines.at(i).isNull() ? QStringLiteral("") : lines.at(i));
+            update.addBindValue(i);
             update.addBindValue(existing.at(i).id);
             if (!update.exec()) {
                 fail(QStringLiteral("could not update Day note Block: %1").arg(update.lastError().text()));
@@ -371,14 +372,15 @@ bool BlockRepository::replaceText(qlonglong itemId, const QString& text)
             return false;
         }
     }
-    QSqlQuery remove(db);
-    remove.prepare(QStringLiteral("DELETE FROM blocks WHERE item_id = ? AND position >= ?"));
-    remove.addBindValue(itemId);
-    remove.addBindValue(lines.size());
-    if (!remove.exec()) {
-        fail(QStringLiteral("could not remove Day note Blocks: %1").arg(remove.lastError().text()));
-        db.rollback();
-        return false;
+    for (int i = lines.size(); i < existing.size(); ++i) {
+        QSqlQuery remove(db);
+        remove.prepare(QStringLiteral("DELETE FROM blocks WHERE id = ?"));
+        remove.addBindValue(existing.at(i).id);
+        if (!remove.exec()) {
+            fail(QStringLiteral("could not remove Day note Blocks: %1").arg(remove.lastError().text()));
+            db.rollback();
+            return false;
+        }
     }
     if (!db.commit()) {
         fail(QStringLiteral("could not commit Day note: %1").arg(db.lastError().text()));

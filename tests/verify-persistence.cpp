@@ -74,6 +74,85 @@ int freshAppData(QTemporaryDir* dataDir)
 
 } // namespace
 
+// Replacement uses ordered row identities, not stored positions, even when
+// positions were written outside the repository's usual contiguous sequence.
+int replaceTextWithNoncontiguousPositions()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    Database database;
+    if (!database.open())
+        return fail(database.lastError());
+    ItemRepository items(database);
+    const auto note = items.create(QStringLiteral("note"), QStringLiteral("Gap note"));
+    const auto other = items.create(QStringLiteral("note"), QStringLiteral("Other note"));
+    if (!note || !other)
+        return fail(items.lastError());
+    BlockRepository blocks(database);
+    QList<qlonglong> ids;
+    for (int i = 0; i < 3; ++i) {
+        Block block;
+        block.itemId = note->id;
+        block.type = QStringLiteral("text");
+        block.content = QString::number(i);
+        const auto created = blocks.create(block);
+        if (!created)
+            return fail(blocks.lastError());
+        ids.append(created->id);
+        QSqlQuery seed(database.connection());
+        seed.prepare(QStringLiteral("UPDATE blocks SET position = ? WHERE id = ?"));
+        seed.addBindValue(10 + i * 10);
+        seed.addBindValue(created->id);
+        if (!seed.exec())
+            return fail(seed.lastError().text());
+    }
+    Block foreign;
+    foreign.itemId = other->id;
+    foreign.type = QStringLiteral("text");
+    foreign.content = QStringLiteral("untouched");
+    const auto foreignCreated = blocks.create(foreign);
+    if (!foreignCreated)
+        return fail(blocks.lastError());
+
+    if (!blocks.replaceText(note->id, QStringLiteral("first\nsecond")))
+        return fail(blocks.lastError());
+    QList<Block> result = blocks.readByItem(note->id);
+    if (!check(result.size() == 2 && result.at(0).id == ids.at(0)
+                   && result.at(1).id == ids.at(1)
+                   && result.at(0).position == 0 && result.at(1).position == 1
+                   && result.at(0).content == QStringLiteral("first")
+                   && result.at(1).content == QStringLiteral("second")
+                   && !blocks.readById(ids.at(2)),
+               QStringLiteral("shrinking a note with position gaps lost or retained the wrong blocks")))
+        return 1;
+
+    QSqlQuery seed(database.connection());
+    seed.prepare(QStringLiteral("UPDATE blocks SET position = position + 10 WHERE item_id = ?"));
+    seed.addBindValue(note->id);
+    if (!seed.exec())
+        return fail(seed.lastError().text());
+    if (!blocks.replaceText(note->id, QStringLiteral("a\nb\nc\nd")))
+        return fail(blocks.lastError());
+    result = blocks.readByItem(note->id);
+    if (!check(result.size() == 4, QStringLiteral("expanding a note with position gaps lost blocks")))
+        return 1;
+    const QStringList expected{QStringLiteral("a"), QStringLiteral("b"),
+                               QStringLiteral("c"), QStringLiteral("d")};
+    for (int i = 0; i < result.size(); ++i) {
+        if (!check(result.at(i).position == i && result.at(i).content == expected.at(i)
+                       && (i >= 2 || result.at(i).id == ids.at(i)),
+                   QStringLiteral("expanded note has incorrect block order, identity or content")))
+            return 1;
+    }
+    const auto foreignAfter = blocks.readById(foreignCreated->id);
+    if (!check(foreignAfter && foreignAfter->content == foreign.content
+                   && foreignAfter->position == foreignCreated->position,
+               QStringLiteral("replacement modified another note")))
+        return 1;
+    return 0;
+}
+
 // Exercise the Phase 4 restart path as one scenario, including date changes
 // and an Event created through the existing store API.
 int todayDataSurvivesRestartTogether()
@@ -3436,6 +3515,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    if (replaceTextWithNoncontiguousPositions() != 0) {
+        return 1;
+    }
     if (todayDataSurvivesRestartTogether() != 0) {
         return 1;
     }
