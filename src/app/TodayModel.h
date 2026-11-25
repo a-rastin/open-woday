@@ -19,7 +19,6 @@ class Database;
 // invokable method. QML binds to those values and holds no date or Item logic;
 // the C++ entry point only wires the model to QML.
 //
-// No Item is written here: the one Day note per date belongs to a later slice.
 // The summary counts are derived afresh from the selected date's Items read
 // through ItemRepository, so they read zero until Task and Event lines exist.
 class TodayModel : public QAbstractListModel
@@ -32,6 +31,9 @@ class TodayModel : public QAbstractListModel
     Q_PROPERTY(QString summary READ summary NOTIFY summaryChanged)
     Q_PROPERTY(int taskCount READ taskCount NOTIFY summaryChanged)
     Q_PROPERTY(int eventCount READ eventCount NOTIFY summaryChanged)
+    Q_PROPERTY(QString dayNoteText READ dayNoteText NOTIFY dayNoteTextChanged)
+    Q_PROPERTY(QString dayNoteError READ dayNoteError NOTIFY dayNoteErrorChanged)
+    Q_PROPERTY(QVariantList lines READ lines NOTIFY linesChanged)
 
 public:
     // Roles of one day cell in the Day strip. The model owns the date
@@ -57,6 +59,11 @@ public:
     QString summary() const;
     int taskCount() const;
     int eventCount() const;
+    QString dayNoteText() const;
+    QString dayNoteError() const;
+    QVariantList lines() const;
+    Q_INVOKABLE void addTask(const QString& title);
+    Q_INVOKABLE void setDayNoteText(const QString& text);
 
     // Select one of the Day strip's dates. Dates outside the strip are ignored,
     // so the view can only move within the contiguous range around today.
@@ -65,9 +72,14 @@ public:
 signals:
     void selectedDateChanged();
     void summaryChanged();
+    void dayNoteTextChanged();
+    void dayNoteErrorChanged();
+    void linesChanged();
 
 private:
     void refreshSummary();
+    bool loadDayNote(const QString& date);
+    void setDayNoteError(const QString& error);
 
     Database& m_database;
     QDate m_today;
@@ -76,6 +88,10 @@ private:
     QString m_selectedDate;
     int m_taskCount = 0;
     int m_eventCount = 0;
+    qlonglong m_dayNoteId = 0;
+    QString m_dayNoteText;
+    QString m_dayNoteError;
+    QVariantList m_lines;
 };
 
 #endif // OPENWODAY_APP_TODAYMODEL_H

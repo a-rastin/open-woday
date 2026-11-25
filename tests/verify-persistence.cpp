@@ -72,6 +72,36 @@ int freshAppData(QTemporaryDir* dataDir)
 
 } // namespace
 
+int todayTaskWriteSurvivesRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+        TodayModel model(database);
+        if (!check(QMetaObject::invokeMethod(&model, "addTask",
+                                              Q_ARG(QString, QStringLiteral("Pack lunch"))),
+                   QStringLiteral("Task creation is unavailable")))
+            return 1;
+    }
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+        TodayModel model(database);
+        const QVariantList lines = model.property("lines").toList();
+        if (!check(lines.size() == 1
+                       && lines.first().toMap().value("title").toString()
+                           == QStringLiteral("Pack lunch"),
+                   QStringLiteral("Task line did not survive restart")))
+            return 1;
+    }
+    return 0;
+}
+
 int dayNoteWritingSurvivesRestart()
 {
     QTemporaryDir dataDir;
@@ -3117,6 +3147,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    if (todayTaskWriteSurvivesRestart() != 0) {
+        return 1;
+    }
     if (dayNoteWritingSurvivesRestart() != 0) {
         return 1;
     }

@@ -321,6 +321,48 @@ bool BlockRepository::update(const Block& block)
     return true;
 }
 
+bool BlockRepository::replaceText(qlonglong itemId, const QString& text)
+{
+    m_error.clear();
+    QSqlDatabase db = m_database.connection();
+    if (!db.transaction()) {
+        fail(QStringLiteral("could not begin writing Day note: %1")
+                 .arg(db.lastError().text()));
+        return false;
+    }
+    QSqlQuery remove(db);
+    remove.prepare(QStringLiteral("DELETE FROM blocks WHERE item_id = ?"));
+    remove.addBindValue(itemId);
+    if (!remove.exec()) {
+        fail(QStringLiteral("could not replace Day note Blocks: %1")
+                 .arg(remove.lastError().text()));
+        db.rollback();
+        return false;
+    }
+    const QStringList lines = text.split(QLatin1Char('\n'), Qt::KeepEmptyParts);
+    for (int i = 0; i < lines.size(); ++i) {
+        QSqlQuery insert(db);
+        insert.prepare(QStringLiteral(
+            "INSERT INTO blocks (item_id, position, type, content) "
+            "VALUES (?, ?, 'text', ?)"));
+        insert.addBindValue(itemId);
+        insert.addBindValue(i);
+        insert.addBindValue(lines.at(i).isNull() ? QStringLiteral("") : lines.at(i));
+        if (!insert.exec()) {
+            fail(QStringLiteral("could not write Day note Block: %1")
+                     .arg(insert.lastError().text()));
+            db.rollback();
+            return false;
+        }
+    }
+    if (!db.commit()) {
+        fail(QStringLiteral("could not commit Day note: %1").arg(db.lastError().text()));
+        db.rollback();
+        return false;
+    }
+    return true;
+}
+
 QList<Block> BlockRepository::select(const QString& statement,
                                     const QVariantList& bindings)
 {

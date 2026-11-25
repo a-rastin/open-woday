@@ -1,6 +1,7 @@
 #include "TodayModel.h"
 
 #include "store/Database.h"
+#include "store/BlockRepository.h"
 #include "store/ItemRepository.h"
 
 #include <QLocale>
@@ -35,6 +36,7 @@ TodayModel::TodayModel(Database& database, QObject* parent)
         m_days.append(m_today.addDays(i - kDaysBeforeToday));
     }
     refreshSummary();
+    loadDayNote(m_selectedDate);
 }
 
 int TodayModel::rowCount(const QModelIndex& parent) const
@@ -117,6 +119,104 @@ int TodayModel::eventCount() const
     return m_eventCount;
 }
 
+QString TodayModel::dayNoteText() const
+{
+    return m_dayNoteText;
+}
+
+QString TodayModel::dayNoteError() const
+{
+    return m_dayNoteError;
+}
+
+QVariantList TodayModel::lines() const
+{
+    return m_lines;
+}
+
+void TodayModel::addTask(const QString& title)
+{
+    if (title.trimmed().isEmpty())
+        return;
+    Item item;
+    item.kind = kTaskKind;
+    item.title = title.trimmed();
+    item.dueAt = m_selectedDate;
+    item.duePrecision = QStringLiteral("day");
+    ItemRepository items(m_database);
+    if (!items.create(item)) {
+        setDayNoteError(items.lastError());
+        return;
+    }
+    refreshSummary();
+}
+
+void TodayModel::setDayNoteError(const QString& error)
+{
+    if (m_dayNoteError != error) {
+        m_dayNoteError = error;
+        emit dayNoteErrorChanged();
+    }
+}
+
+bool TodayModel::loadDayNote(const QString& date)
+{
+    ItemRepository items(m_database);
+    const QList<Item> dated = items.readByDay(date);
+    if (!items.lastError().isEmpty()) {
+        setDayNoteError(items.lastError());
+        return false;
+    }
+    qlonglong id = 0;
+    for (const Item& item : dated) {
+        if (item.kind == QStringLiteral("note")) {
+            id = item.id;
+            break;
+        }
+    }
+    if (!id) {
+        Item note;
+        note.kind = QStringLiteral("note");
+        note.day = date;
+        const auto created = items.create(note);
+        if (!created) {
+            setDayNoteError(items.lastError());
+            return false;
+        }
+        id = created->id;
+    }
+    BlockRepository blocks(m_database);
+    const QList<Block> stored = blocks.readByItem(id);
+    if (!blocks.lastError().isEmpty()) {
+        setDayNoteError(blocks.lastError());
+        return false;
+    }
+    QStringList lines;
+    for (const Block& block : stored) {
+        lines.append(block.content);
+    }
+    m_dayNoteId = id;
+    m_dayNoteText = lines.join(QLatin1Char('\n'));
+    setDayNoteError({});
+    emit dayNoteTextChanged();
+    return true;
+}
+
+void TodayModel::setDayNoteText(const QString& text)
+{
+    if (!m_dayNoteId || text == m_dayNoteText) {
+        return;
+    }
+    BlockRepository blocks(m_database);
+    if (!blocks.replaceText(m_dayNoteId, text)) {
+        setDayNoteError(blocks.lastError());
+        return;
+    }
+    m_dayNoteText = text;
+    setDayNoteError({});
+    emit dayNoteTextChanged();
+}
+
 void TodayModel::selectDate(const QString& date)
 {
     const QDate parsed = QDate::fromString(date, Qt::ISODate);
@@ -129,6 +229,9 @@ void TodayModel::selectDate(const QString& date)
         return;
     }
 
+    if (!loadDayNote(normalized)) {
+        return;
+    }
     m_selected = parsed;
     m_selectedDate = normalized;
     emit selectedDateChanged();
@@ -146,6 +249,7 @@ void TodayModel::refreshSummary()
     ItemRepository items(m_database);
     int tasks = 0;
     int events = 0;
+    QVariantList lines;
     const QList<Item> taskItems = items.readByKind(kTaskKind);
     if (!items.lastError().isEmpty()) {
         qWarning("TodayModel: %s", qPrintable(items.lastError()));
@@ -153,6 +257,7 @@ void TodayModel::refreshSummary()
     for (const Item& item : taskItems) {
         if (item.dueAt && item.dueAt->left(10) == m_selectedDate) {
             ++tasks;
+            lines.append(QVariantMap{{QStringLiteral("title"), item.title}});
         }
     }
     const QList<Item> eventItems = items.readByKind(kEventKind);
@@ -167,5 +272,7 @@ void TodayModel::refreshSummary()
 
     m_taskCount = tasks;
     m_eventCount = events;
+    m_lines = lines;
+    emit linesChanged();
     emit summaryChanged();
 }
