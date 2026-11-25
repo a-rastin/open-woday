@@ -18,9 +18,15 @@ QtObject {
     readonly property real radiusControl: 8
     readonly property real gap: 12
 
-    // Qt resolves the first available family, so Inter is preferred while a
-    // system-UI font keeps the frame usable when Inter is not installed.
-    readonly property string font: "Inter, system-ui"
+    // QML's font.family matches a single family: a comma-separated string is
+    // one literal name and would never resolve to Inter. Resolve the installed
+    // family once for the whole frame — Inter when available, otherwise the
+    // platform's system UI font (the application's default font).
+    readonly property string font: {
+        if (Qt.fontFamilies().indexOf("Inter") !== -1)
+            return "Inter";
+        return Qt.application.font ? Qt.application.font.family : "";
+    }
     readonly property int bodySize: 14
     readonly property int titleSize: 28
     readonly property size dayStripCell: Qt.size(44, 56)
