@@ -485,8 +485,22 @@ the former `PLAN.md` §2.3. They are recorded here so nothing is silently assume
   respect the absorbed ADR decisions (`mission.md` §§5, 6, 8; this file §3).
 - **Testing:** test external behaviour, not implementation details; prefer the
   highest seam and existing seams; the fewer seams the better (ideal = one).
-  There are no tests yet — this is greenfield.
+  The one executable seam is the framework-free
+  `tests/verify-persistence.cpp`. Keep verification framework-free; add no test
+  framework, no unit seams and no CI test job (unchanged from the original
+  rule).
+- **Test execution — GPU Colab rule (amendment):** every run of the
+  verification suite **must be run on a GPU from Google Colab using
+  `colab-cli`**. A local run, a CPU-only run or a run without a proven GPU is
+  not a valid verification. `AGENTS.md` carries the agent-facing rule;
+  `scripts/colab-gpu-test.sh` is the single supported route
+  (`colab new --gpu T4` → `colab upload` → `colab exec` → `colab stop`, with
+  `tests/colab_gpu_verify.py` as the VM-side driver). The driver proves an
+  NVIDIA GPU is usable before it builds and runs `verify-persistence`, and
+  raises otherwise. `colab-cli` authentication is a prerequisite.
 - **No runtime network, no plugin system, no scripting engine, no webview.**
+  (Applies to the shipped application, not to the developer-side Colab test
+  tooling above.)
 - **No schedule or effort estimates** (D7, D9); order is by dependency.
 - **Legal hygiene:** never bundle or publish the guide scrape, upstream
   logos/mascot, upstream UI strings, or the screenshots. All shipped strings and

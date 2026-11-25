@@ -71,6 +71,10 @@ the codebase.
 
 ## Validation checks
 
+Run the executable verification through [`scripts/colab-gpu-test.sh`](../../../scripts/colab-gpu-test.sh)
+on a Google Colab GPU. The build commands below describe what is configured,
+not an alternative test route.
+
 Run on Linux with the checked toolchain (`tech-stack.md` §4): Qt 6.12
 (`Qt6Quick`, `Qt6Widgets`, `Qt6Core`), the SQL/SQLite driver, `qmake6`, `g++`;
 no CMake.
