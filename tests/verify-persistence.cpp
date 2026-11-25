@@ -76,6 +76,59 @@ int freshAppData(QTemporaryDir* dataDir)
 
 } // namespace
 
+int midnightRollover()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    Database database;
+    if (!database.open())
+        return fail(database.lastError());
+    QDateTime now(QDate(2026, 1, 1), QTime(23, 59));
+    TodayModel model(database, nullptr, [&now] { return now; });
+    ItemRepository items(database);
+    BlockRepository blocks(database);
+    const auto oldNote = items.readByDay(QStringLiteral("2026-01-01")).first();
+    model.setDayNoteText(QStringLiteral("before midnight"));
+    int resets = 0;
+    QObject::connect(&model, &QAbstractItemModel::modelReset, [&resets] { ++resets; });
+    now = now.addDays(1);
+    QMetaObject::invokeMethod(&model, "updateToday");
+    const auto saved = blocks.readByItem(oldNote.id);
+    if (!check(resets == 1 && model.selectedDate() == QStringLiteral("2026-01-02")
+               && model.data(model.index(4), TodayModel::IsTodayRole).toBool()
+               && model.data(model.index(4), TodayModel::DateRole).toString() == model.selectedDate()
+               && saved.size() == 1 && saved.first().content == QStringLiteral("before midnight"),
+               QStringLiteral("midnight did not refresh today and save the previous note")))
+        return 1;
+    model.selectDate(QStringLiteral("2026-01-01"));
+    now = now.addDays(1);
+    QMetaObject::invokeMethod(&model, "updateToday");
+    if (!check(resets == 2 && model.selectedDate() == QStringLiteral("2026-01-01")
+               && model.data(model.index(4), TodayModel::DateRole).toString() == QStringLiteral("2026-01-03")
+               && model.dayNoteText() == QStringLiteral("before midnight"),
+               QStringLiteral("midnight changed an independently selected date")))
+        return 1;
+    model.selectDate(QStringLiteral("2026-01-03"));
+    model.setDayNoteText(QStringLiteral("unsaved"));
+    QSqlQuery query(database.connection());
+    if (!query.exec(QStringLiteral(
+            "CREATE TEMP TRIGGER fail_midnight_save BEFORE INSERT ON blocks "
+            "BEGIN SELECT RAISE(FAIL, 'save failed'); END")))
+        return fail(query.lastError().text());
+    now = now.addDays(1);
+    QMetaObject::invokeMethod(&model, "updateToday");
+    if (!check(resets == 3 && model.selectedDate() == QStringLiteral("2026-01-03")
+               && model.dayNoteText() == QStringLiteral("unsaved")
+               && !model.dayNoteError().isEmpty()
+               && model.data(model.index(4), TodayModel::DateRole).toString() == QStringLiteral("2026-01-04"),
+               QStringLiteral("failed midnight save did not preserve the selected note")))
+        return 1;
+    if (!query.exec(QStringLiteral("DROP TRIGGER fail_midnight_save")) || !model.flushDayNote())
+        return fail(QStringLiteral("could not save note after simulated failure"));
+    return 0;
+}
+
 int debouncedDayNoteWrites()
 {
     QTemporaryDir dataDir;
@@ -3617,6 +3670,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    if (midnightRollover() != 0) {
+        return 1;
+    }
     if (debouncedDayNoteWrites() != 0) {
         return 1;
     }

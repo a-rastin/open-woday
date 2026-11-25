@@ -7,6 +7,8 @@
 #include <QLocale>
 #include <QDateTime>
 #include <QCoreApplication>
+#include <QTimeZone>
+#include <utility>
 
 namespace {
 
@@ -27,10 +29,17 @@ QString isoDate(const QDate& date)
 } // namespace
 
 TodayModel::TodayModel(Database& database, QObject* parent)
+    : TodayModel(database, parent, [] { return QDateTime::currentDateTime(); })
+{
+}
+
+TodayModel::TodayModel(Database& database, QObject* parent,
+                       std::function<QDateTime()> clock)
     : QAbstractListModel(parent),
       m_database(database),
-      m_today(QDate::currentDate()),
-      m_selected(m_today)
+      m_today(clock().date()),
+      m_selected(m_today),
+      m_clock(std::move(clock))
 {
     m_noteSaveTimer.setSingleShot(true);
     m_noteSaveTimer.setInterval(400);
@@ -44,6 +53,33 @@ TodayModel::TodayModel(Database& database, QObject* parent)
     }
     refreshLinesAndSummary();
     loadDayNote(selectedDate());
+    m_midnightTimer.setSingleShot(true);
+    connect(&m_midnightTimer, &QTimer::timeout, this, &TodayModel::updateToday);
+    scheduleMidnight();
+}
+
+void TodayModel::scheduleMidnight()
+{
+    const QDateTime now = m_clock();
+    const QDateTime midnight = now.date().addDays(1).startOfDay(now.timeZone());
+    m_midnightTimer.start(static_cast<int>(qMax<qint64>(1, now.msecsTo(midnight))));
+}
+
+void TodayModel::updateToday()
+{
+    const QDate today = m_clock().date();
+    if (today != m_today) {
+        const bool followToday = m_selected == m_today;
+        beginResetModel();
+        m_today = today;
+        m_days.clear();
+        for (int i = 0; i < kDayStripSize; ++i)
+            m_days.append(m_today.addDays(i - kDaysBeforeToday));
+        endResetModel();
+        if (followToday)
+            selectDate(isoDate(today));
+    }
+    scheduleMidnight();
 }
 
 TodayModel::~TodayModel()

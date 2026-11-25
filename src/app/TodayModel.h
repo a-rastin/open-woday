@@ -11,6 +11,9 @@
 #include <QTimer>
 #include <QVariant>
 #include <QtGlobal>
+#include <functional>
+
+class QDateTime;
 
 class Database;
 
@@ -51,6 +54,8 @@ public:
     Q_ENUM(DayRole)
 
     explicit TodayModel(Database& database, QObject* parent = nullptr);
+    TodayModel(Database& database, QObject* parent,
+               std::function<QDateTime()> clock);
     ~TodayModel() override;
 
     int rowCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -86,7 +91,11 @@ signals:
     void refreshErrorChanged();
     void linesChanged();
 
+private slots:
+    void updateToday();
+
 private:
+    void scheduleMidnight();
     void refreshLinesAndSummary();
     bool loadDayNote(const QString& date);
     void setDayNoteError(const QString& error);
@@ -106,6 +115,8 @@ private:
     bool m_dayNoteDirty = false;
     bool m_dayNoteEditable = false;
     QTimer m_noteSaveTimer;
+    QTimer m_midnightTimer;
+    std::function<QDateTime()> m_clock;
     QVariantList m_lines;
 };
 
