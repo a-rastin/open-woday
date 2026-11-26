@@ -5490,17 +5490,83 @@ int taskNotePlainTextGuardAndFailureSafety()
                    QStringLiteral("retried switch did not persist previously unsaved Task Note")))
             return 1;
 
-        // Soft-deleting the selected Task while its Note has pending edits
-        // succeeds and closes the detail pane cleanly.
+        // Soft-deleting the selected Task while its Note save fails aborts
+        // deletion, preserves the unsaved Note, and surfaces the error for retry.
         if (!check(itemModel.selectTask(deletedDirtyTaskId),
                    QStringLiteral("could not select Task for dirty delete check")))
             return 1;
         itemModel.setNoteText(QStringLiteral("Pending before delete"));
+
+        if (!query.exec(QStringLiteral(
+                "CREATE TRIGGER reject_task_note BEFORE INSERT ON blocks "
+                "BEGIN SELECT RAISE(FAIL, 'disk write failed'); END")))
+            return fail(query.lastError().text());
+
+        ItemRepository items(database);
+        if (!check(!itemModel.deleteTask(deletedDirtyTaskId)
+                       && itemModel.hasSelection()
+                       && itemModel.selectedId() == deletedDirtyTaskId
+                       && itemModel.noteText() == QStringLiteral("Pending before delete")
+                       && itemModel.noteError().contains(QStringLiteral("Cannot delete Task"))
+                       && itemModel.noteError().contains(QStringLiteral("disk write failed"))
+                       && items.readById(deletedDirtyTaskId.toLongLong()).has_value(),
+                   QStringLiteral("failed Task Note save did not abort Task deletion with preserved note")))
+            return 1;
+
+        if (!query.exec(QStringLiteral("DROP TRIGGER reject_task_note")))
+            return fail(query.lastError().text());
+
         if (!check(itemModel.deleteTask(deletedDirtyTaskId)
                        && !itemModel.hasSelection()
                        && !itemModel.noteEditable()
-                       && itemModel.noteText().isEmpty(),
-                   QStringLiteral("deleting selected Task with pending Note edit did not close cleanly")))
+                       && itemModel.noteText().isEmpty()
+                       && itemModel.noteError().isEmpty()
+                       && !items.readById(deletedDirtyTaskId.toLongLong()).has_value(),
+                   QStringLiteral("retried delete of selected Task with pending Note edit did not flush and close cleanly")))
+            return 1;
+
+        // Deleting an ancestor Task while a selected descendant subtask has a
+        // dirty Note also flushes the subtask's Note and aborts on failure.
+        const QString dirtySubtaskId =
+            itemModel.addSubtask(otherTaskId, QStringLiteral("Dirty Subtask"));
+        if (!check(!dirtySubtaskId.isEmpty() && itemModel.selectTask(dirtySubtaskId),
+                   QStringLiteral("could not create or select subtask for ancestor delete check")))
+            return 1;
+        itemModel.setNoteText(QStringLiteral("Subtask pending before parent delete"));
+
+        if (!query.exec(QStringLiteral(
+                "CREATE TRIGGER reject_task_note BEFORE INSERT ON blocks "
+                "BEGIN SELECT RAISE(FAIL, 'disk write failed'); END")))
+            return fail(query.lastError().text());
+
+        if (!check(!itemModel.deleteTask(otherTaskId)
+                       && itemModel.hasSelection()
+                       && itemModel.selectedId() == dirtySubtaskId
+                       && itemModel.noteText() == QStringLiteral("Subtask pending before parent delete")
+                       && itemModel.noteError().contains(QStringLiteral("Cannot delete Task"))
+                       && itemModel.noteError().contains(QStringLiteral("disk write failed"))
+                       && items.readById(otherTaskId.toLongLong()).has_value()
+                       && items.readById(dirtySubtaskId.toLongLong()).has_value(),
+                   QStringLiteral("failed subtask Note save did not abort ancestor Task deletion")))
+            return 1;
+
+        if (!query.exec(QStringLiteral("DROP TRIGGER reject_task_note")))
+            return fail(query.lastError().text());
+
+        if (!check(itemModel.deleteTask(otherTaskId)
+                       && !itemModel.hasSelection()
+                       && !itemModel.noteEditable()
+                       && itemModel.noteText().isEmpty()
+                       && itemModel.noteError().isEmpty()
+                       && !items.readById(otherTaskId.toLongLong()).has_value()
+                       && !items.readById(dirtySubtaskId.toLongLong()).has_value(),
+                   QStringLiteral("retried ancestor Task deletion did not flush subtask Note and close cleanly")))
+            return 1;
+
+        const auto persistedSubtaskBlocks = blocks.readByItem(dirtySubtaskId.toLongLong());
+        if (!check(persistedSubtaskBlocks.size() == 1
+                       && persistedSubtaskBlocks.at(0).content == QStringLiteral("Subtask pending before parent delete"),
+                   QStringLiteral("retried ancestor deletion did not persist dirty subtask Note")))
             return 1;
     }
 
@@ -5513,11 +5579,14 @@ int taskNotePlainTextGuardAndFailureSafety()
         const auto headingAfter = blocks.readById(headingBlockId);
         const auto inlineAfter = blocks.readById(inlineJsonBlockId);
         const auto plainAfter = blocks.readByItem(plainTaskId.toLongLong());
+        const auto deletedAfter = blocks.readByItem(deletedDirtyTaskId.toLongLong());
         if (!check(headingAfter && headingAfter->type == QStringLiteral("heading")
                        && headingAfter->content == QStringLiteral("Project Spec")
                        && inlineAfter && inlineAfter->inlineJson.has_value()
                        && plainAfter.size() == 1
-                       && plainAfter.at(0).content == QStringLiteral("Unsaved Task context"),
+                       && plainAfter.at(0).content == QStringLiteral("Unsaved Task context")
+                       && deletedAfter.size() == 1
+                       && deletedAfter.at(0).content == QStringLiteral("Pending before delete"),
                    QStringLiteral("guarded formatted Blocks or plain Task Note changed after restart")))
             return 1;
     }

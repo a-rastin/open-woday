@@ -146,6 +146,8 @@ private:
     void refreshFolders();
     void refreshAvailableTags();
     bool loadTaskNote(qlonglong taskId);
+    bool flushDirtyNoteOrSetError(const QString& blockedAction);
+    bool isSelectedOrDescendantOf(qlonglong taskId) const;
     void clearSelectionState();
     void setError(const QString& error);
 

@@ -9,6 +9,7 @@
 #include <QDate>
 #include <QDateTime>
 #include <QLocale>
+#include <QSet>
 #include <QStringList>
 #include <QTime>
 #include <QVariantMap>
@@ -463,6 +464,42 @@ bool ItemModel::loadTaskNote(qlonglong taskId)
     return true;
 }
 
+bool ItemModel::flushDirtyNoteOrSetError(const QString& blockedAction)
+{
+    if (m_selectedId <= 0 || !m_noteBuffer.isDirty() || flushNote())
+        return true;
+
+    if (!blockedAction.isEmpty()) {
+        m_noteBuffer.setError(QStringLiteral(
+            "Cannot %1 because the Task Note could not be saved. "
+            "Your changes are still here; try again. %2")
+                                  .arg(blockedAction, m_noteBuffer.error()));
+    }
+    return false;
+}
+
+bool ItemModel::isSelectedOrDescendantOf(qlonglong taskId) const
+{
+    if (m_selectedId <= 0 || taskId <= 0)
+        return false;
+    if (m_selectedId == taskId)
+        return true;
+
+    ItemRepository items(m_database);
+    QSet<qlonglong> visited;
+    std::optional<qlonglong> currentParent = m_parentId;
+    while (currentParent && *currentParent > 0 && !visited.contains(*currentParent)) {
+        if (*currentParent == taskId)
+            return true;
+        visited.insert(*currentParent);
+        const std::optional<Item> parent = items.readById(*currentParent);
+        if (!parent || parent->kind != kTaskKind)
+            break;
+        currentParent = parent->parentId;
+    }
+    return false;
+}
+
 void ItemModel::setError(const QString& error)
 {
     if (m_error != error) {
@@ -482,13 +519,9 @@ bool ItemModel::selectTask(const QString& id)
     if (!stored)
         return false;
 
-    if (m_selectedId > 0 && m_noteBuffer.isDirty() && !flushNote()) {
-        if (stored->id != m_selectedId) {
-            m_noteBuffer.setError(QStringLiteral(
-                "Cannot switch Task because the Task Note could not be saved. "
-                "Your changes are still here; try again. %1")
-                                      .arg(m_noteBuffer.error()));
-        }
+    if (!flushDirtyNoteOrSetError(stored->id != m_selectedId
+                                      ? QStringLiteral("switch Task")
+                                      : QString())) {
         return false;
     }
 
@@ -500,13 +533,8 @@ bool ItemModel::selectTask(const QString& id)
 
 void ItemModel::clearSelection()
 {
-    if (m_selectedId > 0 && m_noteBuffer.isDirty() && !flushNote()) {
-        m_noteBuffer.setError(QStringLiteral(
-            "Cannot close Task details because the Task Note could not be saved. "
-            "Your changes are still here; try again. %1")
-                                  .arg(m_noteBuffer.error()));
+    if (!flushDirtyNoteOrSetError(QStringLiteral("close Task details")))
         return;
-    }
     clearSelectionState();
 }
 
@@ -1060,6 +1088,11 @@ bool ItemModel::deleteTask(const QString& id)
     const std::optional<Item> stored = readTask(id);
     if (!stored)
         return false;
+
+    if (isSelectedOrDescendantOf(stored->id)
+        && !flushDirtyNoteOrSetError(QStringLiteral("delete Task"))) {
+        return false;
+    }
 
     ItemRepository items(m_database);
     if (!items.softDelete(stored->id)) {
