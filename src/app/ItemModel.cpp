@@ -1,12 +1,15 @@
 #include "ItemModel.h"
 
+#include "store/BlockRepository.h"
 #include "store/Database.h"
 #include "store/FolderRepository.h"
 #include "store/ItemRepository.h"
 #include "store/TagRepository.h"
 
+#include <QCoreApplication>
 #include <QDate>
 #include <QDateTime>
+#include <QStringList>
 #include <QTime>
 #include <QVariantMap>
 
@@ -97,10 +100,23 @@ ItemModel::ItemModel(Database& database, QObject* parent)
     : QObject(parent),
       m_database(database)
 {
+    m_noteSaveTimer.setSingleShot(true);
+    m_noteSaveTimer.setInterval(400);
+    connect(&m_noteSaveTimer, &QTimer::timeout, this, &ItemModel::flushNote);
+    if (QCoreApplication::instance()) {
+        connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
+                this, &ItemModel::flushNote);
+    }
+
     if (m_database.connection().isOpen()) {
         refreshFolders();
         refreshAvailableTags();
     }
+}
+
+ItemModel::~ItemModel()
+{
+    flushNote();
 }
 
 bool ItemModel::hasSelection() const
@@ -221,6 +237,21 @@ int ItemModel::subtaskDone() const
 int ItemModel::subtaskTotal() const
 {
     return m_subtaskTotal;
+}
+
+QString ItemModel::noteText() const
+{
+    return m_noteText;
+}
+
+bool ItemModel::noteEditable() const
+{
+    return m_noteEditable;
+}
+
+QString ItemModel::noteError() const
+{
+    return m_noteError;
 }
 
 QString ItemModel::error() const
@@ -358,7 +389,7 @@ void ItemModel::refreshSelectedTask()
         return;
 
     if (!stored || stored->kind != kTaskKind) {
-        clearSelection();
+        clearSelectionState();
         return;
     }
 
@@ -410,6 +441,77 @@ void ItemModel::refreshAvailableTags()
     }
 }
 
+void ItemModel::setNoteEditable(bool editable)
+{
+    if (m_noteEditable != editable) {
+        m_noteEditable = editable;
+        emit noteEditableChanged();
+    }
+}
+
+void ItemModel::setNoteError(const QString& error)
+{
+    if (m_noteError != error) {
+        m_noteError = error;
+        emit noteErrorChanged();
+    }
+}
+
+void ItemModel::resetTaskNote()
+{
+    m_noteSaveTimer.stop();
+    m_noteDirty = false;
+    m_savedNoteText.clear();
+    if (!m_noteText.isEmpty()) {
+        m_noteText.clear();
+        emit noteTextChanged();
+    }
+    setNoteEditable(false);
+    setNoteError({});
+}
+
+bool ItemModel::loadTaskNote(qlonglong taskId)
+{
+    BlockRepository blocks(m_database);
+    const QList<Block> stored = blocks.readByItem(taskId);
+    if (!blocks.lastError().isEmpty()) {
+        m_noteSaveTimer.stop();
+        m_noteDirty = false;
+        m_savedNoteText.clear();
+        if (!m_noteText.isEmpty()) {
+            m_noteText.clear();
+            emit noteTextChanged();
+        }
+        setNoteEditable(false);
+        setNoteError(blocks.lastError());
+        return false;
+    }
+
+    QStringList lines;
+    lines.reserve(stored.size());
+    bool editable = true;
+    for (const Block& block : stored) {
+        lines.append(block.content);
+        editable = editable && BlockRepository::isPlainText(block);
+    }
+
+    const QString nextText = lines.join(QLatin1Char('\n'));
+    m_noteSaveTimer.stop();
+    m_noteDirty = false;
+    m_savedNoteText = nextText;
+    if (m_noteText != nextText) {
+        m_noteText = nextText;
+        emit noteTextChanged();
+    }
+    setNoteEditable(editable);
+    setNoteError(editable
+                     ? QString()
+                     : QStringLiteral(
+                         "This Note contains formatted Blocks and is read-only "
+                         "in the plain-text editor."));
+    return true;
+}
+
 void ItemModel::setError(const QString& error)
 {
     if (m_error != error) {
@@ -429,12 +531,33 @@ bool ItemModel::selectTask(const QString& id)
     if (!stored)
         return false;
 
+    if (m_selectedId > 0 && m_noteDirty && !flushNote()) {
+        if (stored->id != m_selectedId) {
+            setNoteError(QStringLiteral(
+                "Cannot switch Task because the Task Note could not be saved. "
+                "Your changes are still here; try again. %1").arg(m_noteError));
+        }
+        return false;
+    }
+
     setError({});
+    loadTaskNote(stored->id);
     applySelectedItem(*stored);
     return true;
 }
 
 void ItemModel::clearSelection()
+{
+    if (m_selectedId > 0 && m_noteDirty && !flushNote()) {
+        setNoteError(QStringLiteral(
+            "Cannot close Task details because the Task Note could not be saved. "
+            "Your changes are still here; try again. %1").arg(m_noteError));
+        return;
+    }
+    clearSelectionState();
+}
+
+void ItemModel::clearSelectionState()
 {
     const bool hadSelection = (m_selectedId != 0);
     const bool hadTaskData = hadSelection || !m_title.isEmpty() || m_completed
@@ -460,6 +583,7 @@ void ItemModel::clearSelection()
     m_subtasks.clear();
     m_subtaskDone = 0;
     m_subtaskTotal = 0;
+    resetTaskNote();
     setError({});
 
     if (hadSelection)
@@ -942,6 +1066,42 @@ bool ItemModel::detachTag(const QString& id, const QString& tagId)
     return true;
 }
 
+void ItemModel::setNoteText(const QString& text)
+{
+    if (!m_noteEditable || m_selectedId <= 0 || text == m_noteText)
+        return;
+
+    m_noteText = text;
+    emit noteTextChanged();
+    if (text == m_savedNoteText) {
+        m_noteSaveTimer.stop();
+        m_noteDirty = false;
+        setNoteError({});
+        return;
+    }
+
+    m_noteDirty = true;
+    m_noteSaveTimer.start();
+}
+
+bool ItemModel::flushNote()
+{
+    m_noteSaveTimer.stop();
+    if (!m_noteDirty || m_selectedId <= 0)
+        return true;
+
+    BlockRepository blocks(m_database);
+    if (!blocks.replaceText(m_selectedId, m_noteText)) {
+        setNoteError(blocks.lastError());
+        return false;
+    }
+
+    m_noteDirty = false;
+    m_savedNoteText = m_noteText;
+    setNoteError({});
+    return true;
+}
+
 bool ItemModel::deleteTask(const QString& id)
 {
     const std::optional<Item> stored = readTask(id);
@@ -956,7 +1116,7 @@ bool ItemModel::deleteTask(const QString& id)
 
     setError({});
     if (stored->id == m_selectedId)
-        clearSelection();
+        clearSelectionState();
     else
         refreshSelectedTask();
     emit taskMutated(stored->id);
@@ -979,7 +1139,7 @@ void ItemModel::syncTask(qlonglong id)
         return;
 
     if (!stored || stored->kind != kTaskKind) {
-        clearSelection();
+        clearSelectionState();
         return;
     }
 

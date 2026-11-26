@@ -15,6 +15,11 @@ Item {
             titleInput.text = itemModel.title
     }
 
+    function syncNoteFromModel() {
+        if (!noteEditor.activeFocus)
+            noteEditor.text = itemModel.noteText
+    }
+
     function commitTitle() {
         const trimmed = titleInput.text.trim()
         if (trimmed.length === 0) {
@@ -133,7 +138,11 @@ Item {
         return false
     }
 
-    Component.onCompleted: syncTitleFromModel()
+    Component.onCompleted: {
+        syncTitleFromModel()
+        syncNoteFromModel()
+    }
+    Component.onDestruction: itemModel.flushNote()
 
     Connections {
         target: itemModel
@@ -141,10 +150,15 @@ Item {
             pane.closePopups()
             titleInput.focus = false
             titleInput.text = itemModel.title
+            noteEditor.focus = false
+            noteEditor.text = itemModel.noteText
             newSubtaskInput.text = ""
         }
         function onSelectedTaskChanged() {
             pane.syncTitleFromModel()
+        }
+        function onNoteTextChanged() {
+            pane.syncNoteFromModel()
         }
     }
 
@@ -207,6 +221,7 @@ Item {
         }
 
         Flickable {
+            id: detailFlickable
             Layout.fillWidth: true
             Layout.fillHeight: true
             contentWidth: width
@@ -570,6 +585,93 @@ Item {
                             enabled: newSubtaskInput.text.trim().length > 0
                             onClicked: pane.submitNewSubtaskInput()
                         }
+                    }
+                }
+
+                ColumnLayout {
+                    id: noteSection
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("Note")
+                        color: pane.theme.muted
+                        font.family: pane.theme.font
+                        font.pixelSize: pane.theme.bodySize - 2
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        implicitHeight: Math.max(120, noteEditor.contentHeight + 16)
+                        radius: pane.theme.radiusControl
+                        color: itemModel.noteEditable && noteEditor.activeFocus
+                            ? pane.theme.panel
+                            : pane.theme.chip
+                        border.color: noteEditor.activeFocus
+                            ? pane.theme.muted
+                            : pane.theme.border
+                        border.width: 1
+
+                        Text {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: 8
+                            visible: noteEditor.text.length === 0 && itemModel.noteEditable
+                            text: qsTr("Write a note...")
+                            color: pane.theme.muted
+                            font.family: pane.theme.font
+                            font.pixelSize: pane.theme.bodySize - 1
+                            wrapMode: Text.Wrap
+                        }
+
+                        TextEdit {
+                            id: noteEditor
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            color: itemModel.noteEditable ? pane.theme.panelText : pane.theme.muted
+                            font.family: pane.theme.font
+                            font.pixelSize: pane.theme.bodySize - 1
+                            textFormat: TextEdit.PlainText
+                            wrapMode: TextEdit.Wrap
+                            selectByMouse: true
+                            readOnly: !itemModel.noteEditable
+                            Accessible.role: Accessible.EditableText
+                            Accessible.name: qsTr("Task note")
+
+                            onCursorRectangleChanged: {
+                                if (!activeFocus || detailFlickable.height <= 0)
+                                    return
+                                const pos = noteEditor.mapToItem(detailBody, 0, cursorRectangle.y)
+                                const cursorTop = pos.y
+                                const cursorBottom = cursorTop + cursorRectangle.height + 8
+                                if (cursorBottom > detailFlickable.contentY + detailFlickable.height)
+                                    detailFlickable.contentY = Math.min(
+                                        Math.max(0, detailFlickable.contentHeight - detailFlickable.height),
+                                        cursorBottom - detailFlickable.height)
+                                else if (cursorTop < detailFlickable.contentY)
+                                    detailFlickable.contentY = Math.max(0, cursorTop)
+                            }
+                            onTextChanged: {
+                                if (activeFocus && text !== itemModel.noteText)
+                                    itemModel.setNoteText(text)
+                            }
+                            onActiveFocusChanged: {
+                                if (!activeFocus)
+                                    itemModel.flushNote()
+                            }
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: text.length > 0
+                        text: itemModel.noteError
+                        color: pane.theme.accent
+                        font.family: pane.theme.font
+                        font.pixelSize: pane.theme.bodySize - 2
+                        wrapMode: Text.Wrap
                     }
                 }
 

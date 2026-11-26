@@ -5170,6 +5170,366 @@ int subtasksAndCascadingSoftDeleteSyncAndPersistAcrossRestart()
     return 0;
 }
 
+int taskNoteScaffoldSyncAndPersistAcrossRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    QString firstTaskId;
+    QString secondTaskId;
+    QString todayDayNoteText = QString::fromUtf8("Day note stays separate");
+    const QString firstWriting = QString::fromUtf8("Context line\n\nسلام");
+    const QString secondWriting = QString::fromUtf8("Second task note");
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+        QObject::connect(&todayModel, &TodayModel::taskUpdated,
+                         &itemModel, &ItemModel::syncTask);
+
+        todayModel.setDayNoteText(todayDayNoteText);
+        if (!todayModel.flushDayNote())
+            return fail(todayModel.dayNoteError());
+
+        if (!todayModel.addTask(QStringLiteral("Draft architecture"))
+            || !todayModel.addTask(QStringLiteral("Prepare release notes")))
+            return fail(QStringLiteral("could not seed Tasks for Task Note test"));
+
+        const QVariantList lines = todayModel.lines();
+        if (!check(lines.size() == 2, QStringLiteral("seeded Tasks missing from Today")))
+            return 1;
+        firstTaskId = lines.at(0).toMap().value(QStringLiteral("id")).toString();
+        secondTaskId = lines.at(1).toMap().value(QStringLiteral("id")).toString();
+
+        if (!check(!itemModel.property("noteEditable").toBool()
+                       && itemModel.property("noteText").toString().isEmpty()
+                       && itemModel.property("noteError").toString().isEmpty(),
+                   QStringLiteral("unselected ItemModel should have non-editable empty Note")))
+            return 1;
+
+        if (!check(itemModel.selectTask(firstTaskId)
+                       && itemModel.property("noteEditable").toBool()
+                       && itemModel.property("noteText").toString().isEmpty()
+                       && itemModel.property("noteError").toString().isEmpty(),
+                   QStringLiteral("selecting a fresh Task did not expose editable empty Note")))
+            return 1;
+
+        BlockRepository blocks(database);
+        itemModel.setNoteText(QStringLiteral("first\nsecond"));
+        if (!check(itemModel.noteText() == QStringLiteral("first\nsecond")
+                       && blocks.readByItem(firstTaskId.toLongLong()).isEmpty(),
+                   QStringLiteral("Task Note saved before debounce or did not update property")))
+            return 1;
+
+        auto wait = [](int ms) {
+            QEventLoop loop;
+            QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+            loop.exec();
+        };
+        wait(250);
+        itemModel.setNoteText(QStringLiteral("first\nchanged"));
+        wait(250);
+        if (!check(blocks.readByItem(firstTaskId.toLongLong()).isEmpty(),
+                   QStringLiteral("Task Note debounce was not restarted on edit")))
+            return 1;
+
+        wait(300);
+        QList<Block> stored = blocks.readByItem(firstTaskId.toLongLong());
+        if (!check(stored.size() == 2
+                       && stored.at(0).type == QStringLiteral("text")
+                       && stored.at(0).content == QStringLiteral("first")
+                       && stored.at(1).type == QStringLiteral("text")
+                       && stored.at(1).content == QStringLiteral("changed"),
+                   QStringLiteral("debounced Task Note save did not persist ordered Blocks")))
+            return 1;
+
+        // Reverting pending edits back to saved text cancels pending write.
+        itemModel.setNoteText(QStringLiteral("temporary"));
+        itemModel.setNoteText(QStringLiteral("first\nchanged"));
+        wait(500);
+        stored = blocks.readByItem(firstTaskId.toLongLong());
+        if (!check(stored.size() == 2
+                       && stored.at(1).content == QStringLiteral("changed"),
+                   QStringLiteral("reverting pending Task Note text modified stored Blocks")))
+            return 1;
+
+        // Task metadata updates must not clobber pending unsaved Note text.
+        itemModel.setNoteText(firstWriting);
+        if (!check(itemModel.setTaskPriority(firstTaskId, 2)
+                       && itemModel.noteText() == firstWriting,
+                   QStringLiteral("updating Task metadata clobbered pending Task Note text")))
+            return 1;
+
+        // Switching Tasks flushes the outgoing Task's dirty Note and loads the next.
+        if (!check(itemModel.selectTask(secondTaskId)
+                       && itemModel.selectedId() == secondTaskId
+                       && itemModel.noteEditable()
+                       && itemModel.noteText().isEmpty(),
+                   QStringLiteral("switching Task did not load second Task Note")))
+            return 1;
+
+        const QList<Block> firstAfterSwitch = blocks.readByItem(firstTaskId.toLongLong());
+        if (!check(firstAfterSwitch.size() == 3
+                       && firstAfterSwitch.at(0).content == QStringLiteral("Context line")
+                       && firstAfterSwitch.at(1).content.isEmpty()
+                       && firstAfterSwitch.at(2).content == QString::fromUtf8("سلام"),
+                   QStringLiteral("switching Task did not flush first Task Note to SQLite")))
+            return 1;
+
+        // Closing selection flushes dirty Note and clears state, then reopening restores it.
+        itemModel.setNoteText(secondWriting);
+        itemModel.clearSelection();
+        if (!check(!itemModel.hasSelection()
+                       && !itemModel.noteEditable()
+                       && itemModel.noteText().isEmpty()
+                       && itemModel.noteError().isEmpty(),
+                   QStringLiteral("closing selection did not reset Task Note state")))
+            return 1;
+
+        const QList<Block> secondAfterClose = blocks.readByItem(secondTaskId.toLongLong());
+        if (!check(secondAfterClose.size() == 1
+                       && secondAfterClose.at(0).content == secondWriting,
+                   QStringLiteral("closing selection did not flush second Task Note")))
+            return 1;
+
+        if (!check(itemModel.selectTask(firstTaskId)
+                       && itemModel.noteText() == firstWriting,
+                   QStringLiteral("reopening Task did not restore its Note")))
+            return 1;
+
+        // Editing Task Note leaves Today's Day note unaffected, and vice versa.
+        if (!check(todayModel.dayNoteText() == todayDayNoteText,
+                   QStringLiteral("editing Task Note affected Today's Day note")))
+            return 1;
+
+        // Unflushed Task Note edit is flushed on ItemModel destruction before restart.
+        itemModel.setNoteText(firstWriting + QStringLiteral("\nPersisted on close"));
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        BlockRepository blocks(database);
+
+        if (!check(todayModel.dayNoteText() == todayDayNoteText,
+                   QStringLiteral("Today's Day note changed after Task Note restart")))
+            return 1;
+
+        if (!check(itemModel.selectTask(firstTaskId)
+                       && itemModel.noteEditable()
+                       && itemModel.noteText() == firstWriting + QStringLiteral("\nPersisted on close")
+                       && itemModel.noteError().isEmpty(),
+                   QStringLiteral("first Task Note did not survive restart")))
+            return 1;
+
+        if (!check(itemModel.selectTask(secondTaskId)
+                       && itemModel.noteEditable()
+                       && itemModel.noteText() == secondWriting
+                       && blocks.readByItem(secondTaskId.toLongLong()).size() == 1,
+                   QStringLiteral("second Task Note did not survive restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
+int taskNotePlainTextGuardAndFailureSafety()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    QString formattedTaskId;
+    QString inlineJsonTaskId;
+    QString plainTaskId;
+    QString otherTaskId;
+    QString deletedDirtyTaskId;
+    qlonglong headingBlockId = 0;
+    qlonglong inlineJsonBlockId = 0;
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+        QObject::connect(&todayModel, &TodayModel::taskUpdated,
+                         &itemModel, &ItemModel::syncTask);
+
+        if (!todayModel.addTask(QStringLiteral("Formatted Task"))
+            || !todayModel.addTask(QStringLiteral("Inline Formatted Task"))
+            || !todayModel.addTask(QStringLiteral("Plain Task"))
+            || !todayModel.addTask(QStringLiteral("Other Task"))
+            || !todayModel.addTask(QStringLiteral("Delete Dirty Task")))
+            return fail(QStringLiteral("could not seed Tasks for Task Note safety test"));
+
+        const QVariantList lines = todayModel.lines();
+        if (!check(lines.size() == 5, QStringLiteral("seeded Tasks missing")))
+            return 1;
+
+        formattedTaskId = lines.at(0).toMap().value(QStringLiteral("id")).toString();
+        inlineJsonTaskId = lines.at(1).toMap().value(QStringLiteral("id")).toString();
+        plainTaskId = lines.at(2).toMap().value(QStringLiteral("id")).toString();
+        otherTaskId = lines.at(3).toMap().value(QStringLiteral("id")).toString();
+        deletedDirtyTaskId = lines.at(4).toMap().value(QStringLiteral("id")).toString();
+
+        BlockRepository blocks(database);
+        Block heading;
+        heading.itemId = formattedTaskId.toLongLong();
+        heading.type = QStringLiteral("heading");
+        heading.content = QStringLiteral("Project Spec");
+        const auto storedHeading = blocks.create(heading);
+        if (!storedHeading)
+            return fail(blocks.lastError());
+        headingBlockId = storedHeading->id;
+
+        Block inlineText;
+        inlineText.itemId = inlineJsonTaskId.toLongLong();
+        inlineText.type = QStringLiteral("text");
+        inlineText.content = QStringLiteral("Bold text");
+        inlineText.inlineJson = QStringLiteral("[{\"start\":0,\"end\":4,\"type\":\"bold\"}]");
+        const auto storedInline = blocks.create(inlineText);
+        if (!storedInline)
+            return fail(blocks.lastError());
+        inlineJsonBlockId = storedInline->id;
+
+        // Selecting formatted Task marks Note read-only with clear diagnostic.
+        if (!check(itemModel.selectTask(formattedTaskId)
+                       && !itemModel.noteEditable()
+                       && itemModel.noteText() == QStringLiteral("Project Spec")
+                       && !itemModel.noteError().isEmpty(),
+                   QStringLiteral("Task with heading Block was not marked read-only")))
+            return 1;
+
+        const QString formattedError = itemModel.noteError();
+        itemModel.setNoteText(QStringLiteral("Overwrite attempt"));
+        if (!check(itemModel.noteText() == QStringLiteral("Project Spec")
+                       && itemModel.flushNote()
+                       && blocks.readById(headingBlockId)->type == QStringLiteral("heading")
+                       && blocks.readById(headingBlockId)->content == QStringLiteral("Project Spec"),
+                   QStringLiteral("read-only Task Note accepted edits or overwrote heading Block")))
+            return 1;
+
+        // Unrelated Task error and subsequent success preserve noteError.
+        if (!check(!itemModel.renameTask(formattedTaskId, QStringLiteral("   "))
+                       && !itemModel.error().isEmpty()
+                       && itemModel.noteError() == formattedError,
+                   QStringLiteral("Task rename error clobbered Task Note diagnostic")))
+            return 1;
+        if (!check(itemModel.renameTask(formattedTaskId, QStringLiteral("Formatted Task Renamed"))
+                       && itemModel.error().isEmpty()
+                       && itemModel.noteError() == formattedError,
+                   QStringLiteral("Task rename success cleared Task Note read-only diagnostic")))
+            return 1;
+
+        // Text Block with inline_json metadata is also guarded as non-plain-text.
+        if (!check(itemModel.selectTask(inlineJsonTaskId)
+                       && !itemModel.noteEditable()
+                       && itemModel.noteText() == QStringLiteral("Bold text")
+                       && !itemModel.noteError().isEmpty(),
+                   QStringLiteral("Task with inline_json Block was not marked read-only")))
+            return 1;
+        itemModel.setNoteText(QStringLiteral("Stripped"));
+        if (!check(blocks.readById(inlineJsonBlockId)->inlineJson.has_value(),
+                   QStringLiteral("inline_json Block metadata was stripped")))
+            return 1;
+
+        // Write failure during Task switch or detail-pane close blocks navigation
+        // and preserves unsaved Task Note edits until retry succeeds.
+        if (!check(itemModel.selectTask(plainTaskId)
+                       && itemModel.noteEditable()
+                       && itemModel.noteError().isEmpty(),
+                   QStringLiteral("plain Task Note did not return to editable")))
+            return 1;
+
+        QSqlQuery query(database.connection());
+        if (!query.exec(QStringLiteral(
+                "CREATE TRIGGER reject_task_note BEFORE INSERT ON blocks "
+                "BEGIN SELECT RAISE(FAIL, 'disk write failed'); END")))
+            return fail(query.lastError().text());
+
+        itemModel.setNoteText(QStringLiteral("Unsaved Task context"));
+        if (!check(!itemModel.selectTask(otherTaskId)
+                       && itemModel.selectedId() == plainTaskId
+                       && itemModel.noteText() == QStringLiteral("Unsaved Task context")
+                       && itemModel.noteError().contains(QStringLiteral("Cannot switch Task"))
+                       && itemModel.noteError().contains(QStringLiteral("disk write failed")),
+                   QStringLiteral("failed Task Note save did not block Task switch with explanation")))
+            return 1;
+
+        itemModel.clearSelection();
+        if (!check(itemModel.hasSelection()
+                       && itemModel.selectedId() == plainTaskId
+                       && itemModel.noteText() == QStringLiteral("Unsaved Task context")
+                       && itemModel.noteError().contains(QStringLiteral("Cannot close Task details"))
+                       && itemModel.noteError().contains(QStringLiteral("disk write failed")),
+                   QStringLiteral("failed Task Note save did not block close with explanation")))
+            return 1;
+
+        if (!query.exec(QStringLiteral("DROP TRIGGER reject_task_note")))
+            return fail(query.lastError().text());
+
+        if (!check(itemModel.selectTask(otherTaskId)
+                       && itemModel.selectedId() == otherTaskId
+                       && itemModel.noteError().isEmpty(),
+                   QStringLiteral("retry switch after failure did not flush and open next Task")))
+            return 1;
+
+        const auto persistedPlain = blocks.readByItem(plainTaskId.toLongLong());
+        if (!check(persistedPlain.size() == 1
+                       && persistedPlain.at(0).content == QStringLiteral("Unsaved Task context"),
+                   QStringLiteral("retried switch did not persist previously unsaved Task Note")))
+            return 1;
+
+        // Soft-deleting the selected Task while its Note has pending edits
+        // succeeds and closes the detail pane cleanly.
+        if (!check(itemModel.selectTask(deletedDirtyTaskId),
+                   QStringLiteral("could not select Task for dirty delete check")))
+            return 1;
+        itemModel.setNoteText(QStringLiteral("Pending before delete"));
+        if (!check(itemModel.deleteTask(deletedDirtyTaskId)
+                       && !itemModel.hasSelection()
+                       && !itemModel.noteEditable()
+                       && itemModel.noteText().isEmpty(),
+                   QStringLiteral("deleting selected Task with pending Note edit did not close cleanly")))
+            return 1;
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        BlockRepository blocks(database);
+        const auto headingAfter = blocks.readById(headingBlockId);
+        const auto inlineAfter = blocks.readById(inlineJsonBlockId);
+        const auto plainAfter = blocks.readByItem(plainTaskId.toLongLong());
+        if (!check(headingAfter && headingAfter->type == QStringLiteral("heading")
+                       && headingAfter->content == QStringLiteral("Project Spec")
+                       && inlineAfter && inlineAfter->inlineJson.has_value()
+                       && plainAfter.size() == 1
+                       && plainAfter.at(0).content == QStringLiteral("Unsaved Task context"),
+                   QStringLiteral("guarded formatted Blocks or plain Task Note changed after restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -5379,6 +5739,12 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (subtasksAndCascadingSoftDeleteSyncAndPersistAcrossRestart() != 0) {
+        return 1;
+    }
+    if (taskNoteScaffoldSyncAndPersistAcrossRestart() != 0) {
+        return 1;
+    }
+    if (taskNotePlainTextGuardAndFailureSafety() != 0) {
         return 1;
     }
 

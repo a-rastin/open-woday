@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QTimer>
 #include <QVariantList>
 #include <QtGlobal>
 
@@ -44,10 +45,14 @@ class ItemModel : public QObject
     Q_PROPERTY(QVariantList subtasks READ subtasks NOTIFY selectedTaskChanged)
     Q_PROPERTY(int subtaskDone READ subtaskDone NOTIFY selectedTaskChanged)
     Q_PROPERTY(int subtaskTotal READ subtaskTotal NOTIFY selectedTaskChanged)
+    Q_PROPERTY(QString noteText READ noteText NOTIFY noteTextChanged)
+    Q_PROPERTY(bool noteEditable READ noteEditable NOTIFY noteEditableChanged)
+    Q_PROPERTY(QString noteError READ noteError NOTIFY noteErrorChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 
 public:
     explicit ItemModel(Database& database, QObject* parent = nullptr);
+    ~ItemModel() override;
 
     bool hasSelection() const;
     QString selectedId() const;
@@ -73,6 +78,9 @@ public:
     QVariantList subtasks() const;
     int subtaskDone() const;
     int subtaskTotal() const;
+    QString noteText() const;
+    bool noteEditable() const;
+    QString noteError() const;
     QString error() const;
 
     Q_INVOKABLE bool selectTask(const QString& id);
@@ -98,6 +106,8 @@ public:
     Q_INVOKABLE bool attachTag(const QString& id, const QString& tagId);
     Q_INVOKABLE bool attachTagByName(const QString& id, const QString& tagName);
     Q_INVOKABLE bool detachTag(const QString& id, const QString& tagId);
+    Q_INVOKABLE void setNoteText(const QString& text);
+    Q_INVOKABLE bool flushNote();
     Q_INVOKABLE bool deleteTask(const QString& id);
 
 public slots:
@@ -108,6 +118,9 @@ signals:
     void selectedTaskChanged();
     void foldersChanged();
     void availableTagsChanged();
+    void noteTextChanged();
+    void noteEditableChanged();
+    void noteErrorChanged();
     void errorChanged();
     void taskMutated(qlonglong id);
 
@@ -120,6 +133,11 @@ private:
     void refreshSelectedTask();
     void refreshFolders();
     void refreshAvailableTags();
+    bool loadTaskNote(qlonglong taskId);
+    void resetTaskNote();
+    void setNoteEditable(bool editable);
+    void setNoteError(const QString& error);
+    void clearSelectionState();
     void setError(const QString& error);
 
     Database& m_database;
@@ -141,6 +159,12 @@ private:
     QVariantList m_subtasks;
     int m_subtaskDone = 0;
     int m_subtaskTotal = 0;
+    QString m_noteText;
+    QString m_savedNoteText;
+    QString m_noteError;
+    bool m_noteDirty = false;
+    bool m_noteEditable = false;
+    QTimer m_noteSaveTimer;
     QString m_error;
 };
 
