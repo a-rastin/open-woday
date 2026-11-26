@@ -116,6 +116,14 @@ Item {
             tagInput.text = ""
     }
 
+    function submitNewSubtaskInput() {
+        const trimmed = newSubtaskInput.text.trim()
+        if (trimmed.length === 0)
+            return
+        if (itemModel.addSubtask(itemModel.selectedId, trimmed).length > 0)
+            newSubtaskInput.text = ""
+    }
+
     function isTagAttached(tagId) {
         const attached = itemModel.tags
         for (let i = 0; i < attached.length; ++i) {
@@ -133,6 +141,7 @@ Item {
             pane.closePopups()
             titleInput.focus = false
             titleInput.text = itemModel.title
+            newSubtaskInput.text = ""
         }
         function onSelectedTaskChanged() {
             pane.syncTitleFromModel()
@@ -147,13 +156,34 @@ Item {
             Layout.fillWidth: true
             spacing: pane.theme.gap / 2
 
+            Badge {
+                Layout.maximumWidth: Math.max(80, parent.width - 72)
+                visible: itemModel.hasParent
+                theme: pane.theme
+                text: "← " + (itemModel.parentTitle.length > 0 ? itemModel.parentTitle : qsTr("Parent task"))
+                accessibleName: qsTr("Open parent task %1").arg(itemModel.parentTitle)
+                padding: 3
+                leftPadding: 8
+                rightPadding: 8
+                onClicked: {
+                    pane.commitTitle()
+                    itemModel.selectTask(itemModel.parentId)
+                }
+            }
+
             Text {
                 Layout.fillWidth: true
+                visible: !itemModel.hasParent
                 text: qsTr("Task")
                 color: pane.theme.muted
                 font.family: pane.theme.font
                 font.pixelSize: pane.theme.bodySize - 1
                 elide: Text.ElideRight
+            }
+
+            Item {
+                Layout.fillWidth: true
+                visible: itemModel.hasParent
             }
 
             IconButton {
@@ -176,154 +206,383 @@ Item {
             }
         }
 
-        RowLayout {
+        Flickable {
             Layout.fillWidth: true
-            spacing: pane.theme.gap * 0.75
-
-            Checkbox {
-                Layout.alignment: Qt.AlignTop
-                Layout.topMargin: 3
-                theme: pane.theme
-                checked: itemModel.completed
-                priority: itemModel.priority
-                accessibleName: qsTr("Complete %1").arg(itemModel.title)
-                onCheckToggled: itemModel.setTaskCompleted(itemModel.selectedId, !itemModel.completed)
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: Math.max(28, titleInput.implicitHeight + 8)
-                radius: pane.theme.radiusControl
-                color: titleInput.activeFocus ? pane.theme.chip : "transparent"
-                border.color: titleInput.activeFocus ? pane.theme.border : "transparent"
-                border.width: titleInput.activeFocus ? 1 : 0
-
-                TextInput {
-                    id: titleInput
-                    anchors.fill: parent
-                    anchors.margins: 4
-                    text: itemModel.title
-                    color: itemModel.completed ? pane.theme.muted : pane.theme.panelText
-                    font.family: pane.theme.font
-                    font.pixelSize: pane.theme.bodySize + 2
-                    font.strikeout: itemModel.completed
-                    wrapMode: TextInput.Wrap
-                    selectByMouse: true
-                    Accessible.role: Accessible.EditableText
-                    Accessible.name: qsTr("Task title")
-
-                    Keys.onReturnPressed: (event) => {
-                        event.accepted = true
-                        pane.commitTitle()
-                        titleInput.focus = false
-                    }
-                    Keys.onEscapePressed: (event) => {
-                        event.accepted = true
-                        titleInput.text = itemModel.title
-                        titleInput.focus = false
-                    }
-                    onActiveFocusChanged: {
-                        if (!activeFocus)
-                            pane.commitTitle()
-                    }
-                }
-            }
-        }
-
-        // Set-only badge row: displays only attributes set on the Task plus
-        // the "+" trigger for unset details; no empty placeholder chips appear.
-        Flow {
-            id: badgeRow
-            Layout.fillWidth: true
-            spacing: pane.theme.gap / 2
-
-            Badge {
-                id: dueDateBadge
-                visible: itemModel.hasDueDate
-                theme: pane.theme
-                text: pane.theme.formatDueDateTime(itemModel.dueDate, itemModel.dueTime)
-                accessibleName: qsTr("Due date: %1. Click to edit or clear").arg(text)
-                fillColor: itemModel.hasDueTime
-                    ? Qt.rgba(pane.theme.accent.r, pane.theme.accent.g, pane.theme.accent.b, 0.10)
-                    : pane.theme.chip
-                textColor: itemModel.hasDueTime ? pane.theme.accent : pane.theme.panelText
-                borderColor: itemModel.hasDueTime
-                    ? Qt.rgba(pane.theme.accent.r, pane.theme.accent.g, pane.theme.accent.b, 0.22)
-                    : "transparent"
-                onClicked: pane.openDueDateEditor(dueDateBadge)
-            }
-
-            Badge {
-                id: priorityBadge
-                readonly property color tone: pane.theme.priorityColor(itemModel.priority)
-                visible: itemModel.priority > 0
-                theme: pane.theme
-                text: pane.theme.priorityLabel(itemModel.priority)
-                accessibleName: qsTr("Priority: %1. Click to edit or clear").arg(text)
-                fillColor: Qt.rgba(tone.r, tone.g, tone.b, 0.12)
-                textColor: tone
-                borderColor: Qt.rgba(tone.r, tone.g, tone.b, 0.25)
-                onClicked: pane.openPriorityEditor(priorityBadge)
-            }
-
-            Badge {
-                id: durationBadge
-                visible: itemModel.hasDuration
-                theme: pane.theme
-                text: pane.theme.formatDuration(itemModel.durationMin)
-                accessibleName: qsTr("Planned duration: %1. Click to edit or clear").arg(text)
-                onClicked: pane.openDurationEditor(durationBadge)
-            }
-
-            Badge {
-                id: folderBadge
-                visible: itemModel.hasFolder
-                theme: pane.theme
-                text: itemModel.folderName
-                borderColor: pane.theme.border
-                accessibleName: qsTr("Folder: %1. Click to change or clear").arg(text)
-                onClicked: pane.openFolderEditor(folderBadge)
-            }
-
-            Repeater {
-                model: itemModel.tags
-
-                delegate: TagChip {
-                    required property var modelData
-                    theme: pane.theme
-                    tagName: modelData.name
-                    tagColour: modelData.colour !== undefined ? modelData.colour : ""
-                    removable: true
-                    onRemoveRequested: itemModel.detachTag(itemModel.selectedId, modelData.id)
-                }
-            }
-
-            Badge {
-                id: addDetailBadge
-                theme: pane.theme
-                text: "+"
-                accessibleName: qsTr("Add task detail")
-                onClicked: {
-                    pane.addDetailRequested()
-                    pane.closePopups()
-                    pane.positionPopupBelow(addDetailPopup, addDetailBadge)
-                    addDetailPopup.open()
-                }
-            }
-        }
-
-        Text {
-            Layout.fillWidth: true
-            visible: text.length > 0
-            text: itemModel.error
-            color: pane.theme.accent
-            font.family: pane.theme.font
-            font.pixelSize: pane.theme.bodySize - 1
-            wrapMode: Text.Wrap
-        }
-
-        Item {
             Layout.fillHeight: true
+            contentWidth: width
+            contentHeight: detailBody.implicitHeight
+            clip: true
+            ScrollBar.vertical: ScrollBar {}
+
+            ColumnLayout {
+                id: detailBody
+                width: parent.width
+                spacing: pane.theme.gap
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: pane.theme.gap * 0.75
+
+                    Checkbox {
+                        Layout.alignment: Qt.AlignTop
+                        Layout.topMargin: 3
+                        theme: pane.theme
+                        checked: itemModel.completed
+                        priority: itemModel.priority
+                        accessibleName: qsTr("Complete %1").arg(itemModel.title)
+                        onCheckToggled: itemModel.setTaskCompleted(itemModel.selectedId, !itemModel.completed)
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        implicitHeight: Math.max(28, titleInput.implicitHeight + 8)
+                        radius: pane.theme.radiusControl
+                        color: titleInput.activeFocus ? pane.theme.chip : "transparent"
+                        border.color: titleInput.activeFocus ? pane.theme.border : "transparent"
+                        border.width: titleInput.activeFocus ? 1 : 0
+
+                        TextInput {
+                            id: titleInput
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            text: itemModel.title
+                            color: itemModel.completed ? pane.theme.muted : pane.theme.panelText
+                            font.family: pane.theme.font
+                            font.pixelSize: pane.theme.bodySize + 2
+                            font.strikeout: itemModel.completed
+                            wrapMode: TextInput.Wrap
+                            selectByMouse: true
+                            Accessible.role: Accessible.EditableText
+                            Accessible.name: qsTr("Task title")
+
+                            Keys.onReturnPressed: (event) => {
+                                event.accepted = true
+                                pane.commitTitle()
+                                titleInput.focus = false
+                            }
+                            Keys.onEscapePressed: (event) => {
+                                event.accepted = true
+                                titleInput.text = itemModel.title
+                                titleInput.focus = false
+                            }
+                            onActiveFocusChanged: {
+                                if (!activeFocus)
+                                    pane.commitTitle()
+                            }
+                        }
+                    }
+                }
+
+                // Set-only badge row: displays only attributes set on the Task plus
+                // the "+" trigger for unset details; no empty placeholder chips appear.
+                Flow {
+                    id: badgeRow
+                    Layout.fillWidth: true
+                    spacing: pane.theme.gap / 2
+
+                    Badge {
+                        id: dueDateBadge
+                        visible: itemModel.hasDueDate
+                        theme: pane.theme
+                        text: pane.theme.formatDueDateTime(itemModel.dueDate, itemModel.dueTime)
+                        accessibleName: qsTr("Due date: %1. Click to edit or clear").arg(text)
+                        fillColor: itemModel.hasDueTime
+                            ? Qt.rgba(pane.theme.accent.r, pane.theme.accent.g, pane.theme.accent.b, 0.10)
+                            : pane.theme.chip
+                        textColor: itemModel.hasDueTime ? pane.theme.accent : pane.theme.panelText
+                        borderColor: itemModel.hasDueTime
+                            ? Qt.rgba(pane.theme.accent.r, pane.theme.accent.g, pane.theme.accent.b, 0.22)
+                            : "transparent"
+                        onClicked: pane.openDueDateEditor(dueDateBadge)
+                    }
+
+                    Badge {
+                        id: priorityBadge
+                        readonly property color tone: pane.theme.priorityColor(itemModel.priority)
+                        visible: itemModel.priority > 0
+                        theme: pane.theme
+                        text: pane.theme.priorityLabel(itemModel.priority)
+                        accessibleName: qsTr("Priority: %1. Click to edit or clear").arg(text)
+                        fillColor: Qt.rgba(tone.r, tone.g, tone.b, 0.12)
+                        textColor: tone
+                        borderColor: Qt.rgba(tone.r, tone.g, tone.b, 0.25)
+                        onClicked: pane.openPriorityEditor(priorityBadge)
+                    }
+
+                    Badge {
+                        id: durationBadge
+                        visible: itemModel.hasDuration
+                        theme: pane.theme
+                        text: pane.theme.formatDuration(itemModel.durationMin)
+                        accessibleName: qsTr("Planned duration: %1. Click to edit or clear").arg(text)
+                        onClicked: pane.openDurationEditor(durationBadge)
+                    }
+
+                    Badge {
+                        id: folderBadge
+                        visible: itemModel.hasFolder
+                        theme: pane.theme
+                        text: itemModel.folderName
+                        borderColor: pane.theme.border
+                        accessibleName: qsTr("Folder: %1. Click to change or clear").arg(text)
+                        onClicked: pane.openFolderEditor(folderBadge)
+                    }
+
+                    Repeater {
+                        model: itemModel.tags
+
+                        delegate: TagChip {
+                            required property var modelData
+                            theme: pane.theme
+                            tagName: modelData.name
+                            tagColour: modelData.colour !== undefined ? modelData.colour : ""
+                            removable: true
+                            onRemoveRequested: itemModel.detachTag(itemModel.selectedId, modelData.id)
+                        }
+                    }
+
+                    Badge {
+                        id: addDetailBadge
+                        theme: pane.theme
+                        text: "+"
+                        accessibleName: qsTr("Add task detail")
+                        onClicked: {
+                            pane.addDetailRequested()
+                            pane.closePopups()
+                            pane.positionPopupBelow(addDetailPopup, addDetailBadge)
+                            addDetailPopup.open()
+                        }
+                    }
+                }
+
+                ColumnLayout {
+                    id: subtasksSection
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("Subtasks")
+                            color: pane.theme.muted
+                            font.family: pane.theme.font
+                            font.pixelSize: pane.theme.bodySize - 2
+                        }
+
+                        Badge {
+                            visible: itemModel.subtaskTotal > 0
+                            interactive: false
+                            theme: pane.theme
+                            text: qsTr("%1/%2").arg(itemModel.subtaskDone).arg(itemModel.subtaskTotal)
+                            accessibleName: qsTr("%1 of %2 subtasks completed").arg(itemModel.subtaskDone).arg(itemModel.subtaskTotal)
+                            fillColor: pane.theme.chip
+                            textColor: pane.theme.muted
+                            padding: 2
+                            leftPadding: 8
+                            rightPadding: 8
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 2
+                        visible: itemModel.subtasks.length > 0
+
+                        Repeater {
+                            model: itemModel.subtasks
+
+                            delegate: Rectangle {
+                                id: subtaskRow
+                                required property var modelData
+                                property bool editing: false
+
+                                function beginRename() {
+                                    editing = true
+                                    subtaskRenameField.text = modelData.title
+                                    subtaskRenameField.forceActiveFocus()
+                                    subtaskRenameField.selectAll()
+                                }
+
+                                function commitRename() {
+                                    if (!editing)
+                                        return
+                                    const trimmed = subtaskRenameField.text.trim()
+                                    editing = false
+                                    if (trimmed.length > 0 && trimmed !== modelData.title)
+                                        itemModel.renameTask(modelData.id, trimmed)
+                                }
+
+                                function cancelRename() {
+                                    editing = false
+                                    subtaskRenameField.text = modelData.title
+                                }
+
+                                Layout.fillWidth: true
+                                implicitHeight: Math.max(32, subtaskRowContent.implicitHeight + 6)
+                                radius: pane.theme.radiusControl
+                                color: subtaskHover.hovered ? Qt.rgba(0, 0, 0, 0.03) : "transparent"
+
+                                HoverHandler {
+                                    id: subtaskHover
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    acceptedButtons: Qt.LeftButton
+                                    onClicked: {
+                                        pane.commitTitle()
+                                        itemModel.selectTask(subtaskRow.modelData.id)
+                                    }
+                                }
+
+                                RowLayout {
+                                    id: subtaskRowContent
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 4
+                                    anchors.rightMargin: 2
+                                    anchors.topMargin: 3
+                                    anchors.bottomMargin: 3
+                                    spacing: 6
+
+                                    Checkbox {
+                                        Layout.alignment: Qt.AlignVCenter
+                                        theme: pane.theme
+                                        checked: subtaskRow.modelData.completed
+                                        priority: subtaskRow.modelData.priority
+                                        accessibleName: qsTr("Complete %1").arg(subtaskRow.modelData.title)
+                                        onCheckToggled: itemModel.setTaskCompleted(
+                                            subtaskRow.modelData.id,
+                                            !subtaskRow.modelData.completed)
+                                    }
+
+                                    Item {
+                                        Layout.fillWidth: true
+                                        implicitHeight: Math.max(
+                                            subtaskLabel.implicitHeight,
+                                            subtaskRenameField.implicitHeight,
+                                            24)
+
+                                        Text {
+                                            id: subtaskLabel
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            visible: !subtaskRow.editing
+                                            text: subtaskRow.modelData.title
+                                            color: subtaskRow.modelData.completed
+                                                ? pane.theme.muted
+                                                : pane.theme.panelText
+                                            font.family: pane.theme.font
+                                            font.pixelSize: pane.theme.bodySize - 1
+                                            font.strikeout: subtaskRow.modelData.completed
+                                            elide: Text.ElideRight
+
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                onClicked: {
+                                                    pane.commitTitle()
+                                                    itemModel.selectTask(subtaskRow.modelData.id)
+                                                }
+                                                onDoubleClicked: subtaskRow.beginRename()
+                                            }
+                                        }
+
+                                        TextField {
+                                            id: subtaskRenameField
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            visible: subtaskRow.editing
+                                            font.family: pane.theme.font
+                                            font.pixelSize: pane.theme.bodySize - 1
+                                            Accessible.name: qsTr("Rename subtask")
+                                            onAccepted: subtaskRow.commitRename()
+                                            Keys.onEscapePressed: (event) => {
+                                                event.accepted = true
+                                                subtaskRow.cancelRename()
+                                            }
+                                            onActiveFocusChanged: {
+                                                if (!activeFocus && subtaskRow.editing)
+                                                    subtaskRow.commitRename()
+                                            }
+                                        }
+                                    }
+
+                                    Badge {
+                                        visible: !subtaskRow.editing && subtaskRow.modelData.subtaskTotal > 0
+                                        interactive: false
+                                        theme: pane.theme
+                                        text: qsTr("%1/%2")
+                                            .arg(subtaskRow.modelData.subtaskDone)
+                                            .arg(subtaskRow.modelData.subtaskTotal)
+                                        accessibleName: qsTr("%1 of %2 nested subtasks completed")
+                                            .arg(subtaskRow.modelData.subtaskDone)
+                                            .arg(subtaskRow.modelData.subtaskTotal)
+                                        fillColor: pane.theme.chip
+                                        textColor: pane.theme.muted
+                                        padding: 2
+                                        leftPadding: 6
+                                        rightPadding: 6
+                                    }
+
+                                    IconButton {
+                                        theme: pane.theme
+                                        iconKind: "edit"
+                                        toolTipText: qsTr("Rename subtask")
+                                        visible: !subtaskRow.editing
+                                        opacity: subtaskHover.hovered || activeFocus ? 1 : 0.35
+                                        onClicked: subtaskRow.beginRename()
+                                    }
+
+                                    IconButton {
+                                        theme: pane.theme
+                                        iconKind: "delete"
+                                        destructive: true
+                                        toolTipText: qsTr("Delete subtask")
+                                        visible: !subtaskRow.editing
+                                        opacity: subtaskHover.hovered || activeFocus ? 1 : 0.35
+                                        onClicked: itemModel.deleteTask(subtaskRow.modelData.id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        TextField {
+                            id: newSubtaskInput
+                            Layout.fillWidth: true
+                            placeholderText: qsTr("Add subtask")
+                            font.family: pane.theme.font
+                            font.pixelSize: pane.theme.bodySize - 1
+                            Accessible.name: qsTr("Add subtask")
+                            onAccepted: pane.submitNewSubtaskInput()
+                        }
+
+                        Button {
+                            text: qsTr("Add")
+                            enabled: newSubtaskInput.text.trim().length > 0
+                            onClicked: pane.submitNewSubtaskInput()
+                        }
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: text.length > 0
+                    text: itemModel.error
+                    color: pane.theme.accent
+                    font.family: pane.theme.font
+                    font.pixelSize: pane.theme.bodySize - 1
+                    wrapMode: Text.Wrap
+                }
+            }
         }
     }
 

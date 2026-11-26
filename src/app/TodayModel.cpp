@@ -11,6 +11,7 @@
 #include <QCoreApplication>
 #include <QGuiApplication>
 #include <QHash>
+#include <QSet>
 #include <QTimeZone>
 #include <utility>
 
@@ -28,6 +29,103 @@ const QString kEventKind = QStringLiteral("event");
 QString isoDate(const QDate& date)
 {
     return date.toString(Qt::ISODate);
+}
+
+bool hasDueAncestor(const Item& item,
+                    const QHash<qlonglong, Item>& taskById,
+                    const QSet<qlonglong>& dueIds)
+{
+    QSet<qlonglong> visited;
+    visited.insert(item.id);
+    std::optional<qlonglong> cursor = item.parentId;
+    while (cursor && *cursor > 0 && !visited.contains(*cursor)) {
+        if (dueIds.contains(*cursor))
+            return true;
+        visited.insert(*cursor);
+        const auto parentIt = taskById.constFind(*cursor);
+        if (parentIt == taskById.constEnd())
+            break;
+        cursor = parentIt->parentId;
+    }
+    return false;
+}
+
+bool buildTaskLineMap(const Item& item,
+                      const QHash<qlonglong, QList<Item>>& childrenByParent,
+                      const QHash<qlonglong, QString>& folderNames,
+                      TagRepository& tagRepo,
+                      QSet<qlonglong>& visited,
+                      QVariantMap* outMap,
+                      QString* outError)
+{
+    visited.insert(item.id);
+
+    QString dueTime;
+    if (item.dueAt && item.duePrecision == QStringLiteral("time")
+        && item.dueAt->size() > 10) {
+        const QDateTime dt = QDateTime::fromString(*item.dueAt, Qt::ISODate);
+        if (dt.isValid())
+            dueTime = dt.toLocalTime().time().toString(QStringLiteral("HH:mm"));
+    }
+
+    const QList<Tag> itemTags = tagRepo.readForItem(item.id);
+    if (!tagRepo.lastError().isEmpty()) {
+        *outError = tagRepo.lastError();
+        return false;
+    }
+    QVariantList tagList;
+    tagList.reserve(itemTags.size());
+    for (const Tag& tag : itemTags) {
+        tagList.append(QVariantMap{
+            {QStringLiteral("id"), QString::number(tag.id)},
+            {QStringLiteral("name"), tag.name},
+            {QStringLiteral("colour"), tag.colour.value_or(QString())},
+        });
+    }
+
+    const QString folderId = (item.folderId && *item.folderId > 0)
+        ? QString::number(*item.folderId)
+        : QString();
+    const QString folderName = (item.folderId && *item.folderId > 0)
+        ? folderNames.value(*item.folderId)
+        : QString();
+
+    const QList<Item> childItems = childrenByParent.value(item.id);
+    QVariantList subtaskLines;
+    subtaskLines.reserve(childItems.size());
+    int subtaskDone = 0;
+    const int subtaskTotal = childItems.size();
+    for (const Item& child : childItems) {
+        if (child.completedAt.has_value())
+            ++subtaskDone;
+        if (visited.contains(child.id))
+            continue;
+        QVariantMap childMap;
+        if (!buildTaskLineMap(child, childrenByParent, folderNames, tagRepo,
+                              visited, &childMap, outError)) {
+            return false;
+        }
+        subtaskLines.append(childMap);
+    }
+
+    *outMap = QVariantMap{
+        {QStringLiteral("id"), QString::number(item.id)},
+        {QStringLiteral("kind"), kTaskKind},
+        {QStringLiteral("title"), item.title},
+        {QStringLiteral("completed"), item.completedAt.has_value()},
+        {QStringLiteral("priority"), item.priority},
+        {QStringLiteral("durationMin"), item.durationMin.value_or(0)},
+        {QStringLiteral("dueTime"), dueTime},
+        {QStringLiteral("folderId"), folderId},
+        {QStringLiteral("folderName"), folderName},
+        {QStringLiteral("tags"), tagList},
+        {QStringLiteral("parentId"),
+         (item.parentId && *item.parentId > 0) ? QString::number(*item.parentId) : QString()},
+        {QStringLiteral("subtaskDone"), subtaskDone},
+        {QStringLiteral("subtaskTotal"), subtaskTotal},
+        {QStringLiteral("subtasks"), subtaskLines},
+    };
+    return true;
 }
 
 } // namespace
@@ -448,15 +546,37 @@ void TodayModel::refreshLinesAndSummary()
         setRefreshError(items.lastError());
         return;
     }
+    const QList<Item> allTasks = items.readByKind(kTaskKind);
+    if (!items.lastError().isEmpty()) {
+        setRefreshError(items.lastError());
+        return;
+    }
+
+    QHash<qlonglong, Item> taskById;
+    QHash<qlonglong, QList<Item>> childrenByParent;
+    taskById.reserve(allTasks.size());
+    bool needsFolders = false;
+    for (const Item& task : allTasks) {
+        taskById.insert(task.id, task);
+        if (task.parentId && *task.parentId > 0)
+            childrenByParent[*task.parentId].append(task);
+        if (task.folderId && *task.folderId > 0)
+            needsFolders = true;
+    }
+
+    QSet<qlonglong> dueIds;
+    dueIds.reserve(taskItems.size());
+    for (const Item& item : taskItems)
+        dueIds.insert(item.id);
+
+    QList<Item> rootTasks;
+    rootTasks.reserve(taskItems.size());
+    for (const Item& item : taskItems) {
+        if (!hasDueAncestor(item, taskById, dueIds))
+            rootTasks.append(item);
+    }
 
     QHash<qlonglong, QString> folderNames;
-    bool needsFolders = false;
-    for (const Item& item : taskItems) {
-        if (item.folderId && *item.folderId > 0) {
-            needsFolders = true;
-            break;
-        }
-    }
     if (needsFolders) {
         FolderRepository folderRepo(m_database);
         const QList<Folder> folders = folderRepo.readAll();
@@ -470,49 +590,18 @@ void TodayModel::refreshLinesAndSummary()
 
     TagRepository tagRepo(m_database);
     QVariantList lines;
-    for (const Item& item : taskItems) {
-        QString dueTime;
-        if (item.dueAt && item.duePrecision == QStringLiteral("time")
-            && item.dueAt->size() > 10) {
-            const QDateTime dt = QDateTime::fromString(*item.dueAt, Qt::ISODate);
-            if (dt.isValid())
-                dueTime = dt.toLocalTime().time().toString(QStringLiteral("HH:mm"));
-        }
-
-        const QList<Tag> itemTags = tagRepo.readForItem(item.id);
-        if (!tagRepo.lastError().isEmpty()) {
-            setRefreshError(tagRepo.lastError());
+    QSet<qlonglong> visited;
+    for (const Item& item : rootTasks) {
+        if (visited.contains(item.id))
+            continue;
+        QVariantMap lineMap;
+        QString tagError;
+        if (!buildTaskLineMap(item, childrenByParent, folderNames, tagRepo,
+                              visited, &lineMap, &tagError)) {
+            setRefreshError(tagError);
             return;
         }
-        QVariantList tagList;
-        tagList.reserve(itemTags.size());
-        for (const Tag& tag : itemTags) {
-            tagList.append(QVariantMap{
-                {QStringLiteral("id"), QString::number(tag.id)},
-                {QStringLiteral("name"), tag.name},
-                {QStringLiteral("colour"), tag.colour.value_or(QString())},
-            });
-        }
-
-        const QString folderId = (item.folderId && *item.folderId > 0)
-            ? QString::number(*item.folderId)
-            : QString();
-        const QString folderName = (item.folderId && *item.folderId > 0)
-            ? folderNames.value(*item.folderId)
-            : QString();
-
-        lines.append(QVariantMap{
-            {QStringLiteral("id"), QString::number(item.id)},
-            {QStringLiteral("kind"), kTaskKind},
-            {QStringLiteral("title"), item.title},
-            {QStringLiteral("completed"), item.completedAt.has_value()},
-            {QStringLiteral("priority"), item.priority},
-            {QStringLiteral("durationMin"), item.durationMin.value_or(0)},
-            {QStringLiteral("dueTime"), dueTime},
-            {QStringLiteral("folderId"), folderId},
-            {QStringLiteral("folderName"), folderName},
-            {QStringLiteral("tags"), tagList},
-        });
+        lines.append(lineMap);
     }
     for (const Item& item : eventItems) {
         lines.append(QVariantMap{
@@ -522,7 +611,7 @@ void TodayModel::refreshLinesAndSummary()
         });
     }
 
-    m_taskCount = taskItems.size();
+    m_taskCount = rootTasks.size();
     m_eventCount = eventItems.size();
     m_lines = lines;
     setRefreshError({});

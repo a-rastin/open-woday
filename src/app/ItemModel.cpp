@@ -193,6 +193,36 @@ QVariantList ItemModel::availableTags() const
     return m_availableTags;
 }
 
+bool ItemModel::hasParent() const
+{
+    return m_parentId.has_value() && *m_parentId > 0;
+}
+
+QString ItemModel::parentId() const
+{
+    return hasParent() ? QString::number(*m_parentId) : QString();
+}
+
+QString ItemModel::parentTitle() const
+{
+    return m_parentTitle;
+}
+
+QVariantList ItemModel::subtasks() const
+{
+    return m_subtasks;
+}
+
+int ItemModel::subtaskDone() const
+{
+    return m_subtaskDone;
+}
+
+int ItemModel::subtaskTotal() const
+{
+    return m_subtaskTotal;
+}
+
 QString ItemModel::error() const
 {
     return m_error;
@@ -242,6 +272,41 @@ void ItemModel::applySelectedItem(const Item& item)
         nextTags.append(tagToMap(tag));
     }
 
+    ItemRepository itemRepo(m_database);
+    QString nextParentTitle;
+    if (item.parentId && *item.parentId > 0) {
+        const std::optional<Item> parent = itemRepo.readById(*item.parentId);
+        if (parent)
+            nextParentTitle = parent->title;
+    }
+
+    const QList<Item> childItems = itemRepo.readByParent(item.id);
+    QVariantList nextSubtasks;
+    nextSubtasks.reserve(childItems.size());
+    int nextSubtaskDone = 0;
+    const int nextSubtaskTotal = childItems.size();
+    for (const Item& child : childItems) {
+        const bool childCompleted = child.completedAt.has_value();
+        if (childCompleted)
+            ++nextSubtaskDone;
+
+        const QList<Item> grandChildren = itemRepo.readByParent(child.id);
+        int grandDone = 0;
+        for (const Item& grand : grandChildren) {
+            if (grand.completedAt.has_value())
+                ++grandDone;
+        }
+
+        nextSubtasks.append(QVariantMap{
+            { QStringLiteral("id"), QString::number(child.id) },
+            { QStringLiteral("title"), child.title },
+            { QStringLiteral("completed"), childCompleted },
+            { QStringLiteral("priority"), child.priority },
+            { QStringLiteral("subtaskDone"), grandDone },
+            { QStringLiteral("subtaskTotal"), grandChildren.size() },
+        });
+    }
+
     const bool taskChanged = idChanged
         || m_title != item.title
         || m_completed != nextCompleted
@@ -252,7 +317,12 @@ void ItemModel::applySelectedItem(const Item& item)
         || m_duePrecision != due.precision
         || m_folderId != item.folderId
         || m_folderName != nextFolderName
-        || m_tags != nextTags;
+        || m_tags != nextTags
+        || m_parentId != item.parentId
+        || m_parentTitle != nextParentTitle
+        || m_subtasks != nextSubtasks
+        || m_subtaskDone != nextSubtaskDone
+        || m_subtaskTotal != nextSubtaskTotal;
 
     m_selectedId = item.id;
     m_title = item.title;
@@ -265,11 +335,34 @@ void ItemModel::applySelectedItem(const Item& item)
     m_folderId = item.folderId;
     m_folderName = nextFolderName;
     m_tags = nextTags;
+    m_parentId = item.parentId;
+    m_parentTitle = nextParentTitle;
+    m_subtasks = nextSubtasks;
+    m_subtaskDone = nextSubtaskDone;
+    m_subtaskTotal = nextSubtaskTotal;
 
     if (idChanged)
         emit selectionChanged();
     if (taskChanged)
         emit selectedTaskChanged();
+}
+
+void ItemModel::refreshSelectedTask()
+{
+    if (m_selectedId <= 0)
+        return;
+
+    ItemRepository items(m_database);
+    const std::optional<Item> stored = items.readById(m_selectedId);
+    if (!items.lastError().isEmpty())
+        return;
+
+    if (!stored || stored->kind != kTaskKind) {
+        clearSelection();
+        return;
+    }
+
+    applySelectedItem(*stored);
 }
 
 void ItemModel::refreshFolders()
@@ -347,7 +440,9 @@ void ItemModel::clearSelection()
     const bool hadTaskData = hadSelection || !m_title.isEmpty() || m_completed
         || m_priority != 0 || m_durationMin.has_value()
         || !m_dueDate.isEmpty() || !m_dueTime.isEmpty() || !m_duePrecision.isEmpty()
-        || m_folderId.has_value() || !m_folderName.isEmpty() || !m_tags.isEmpty();
+        || m_folderId.has_value() || !m_folderName.isEmpty() || !m_tags.isEmpty()
+        || m_parentId.has_value() || !m_parentTitle.isEmpty() || !m_subtasks.isEmpty()
+        || m_subtaskDone != 0 || m_subtaskTotal != 0;
 
     m_selectedId = 0;
     m_title.clear();
@@ -360,12 +455,47 @@ void ItemModel::clearSelection()
     m_folderId = std::nullopt;
     m_folderName.clear();
     m_tags.clear();
+    m_parentId = std::nullopt;
+    m_parentTitle.clear();
+    m_subtasks.clear();
+    m_subtaskDone = 0;
+    m_subtaskTotal = 0;
     setError({});
 
     if (hadSelection)
         emit selectionChanged();
     if (hadTaskData)
         emit selectedTaskChanged();
+}
+
+QString ItemModel::addSubtask(const QString& parentId, const QString& title)
+{
+    const QString trimmed = title.trimmed();
+    if (trimmed.isEmpty()) {
+        setError(QStringLiteral("Subtask title cannot be empty."));
+        return QString();
+    }
+
+    const std::optional<Item> parent = readTask(parentId);
+    if (!parent)
+        return QString();
+
+    Item subtask;
+    subtask.kind = kTaskKind;
+    subtask.title = trimmed;
+    subtask.parentId = parent->id;
+
+    ItemRepository items(m_database);
+    const std::optional<Item> created = items.create(subtask);
+    if (!created) {
+        setError(items.lastError());
+        return QString();
+    }
+
+    setError({});
+    refreshSelectedTask();
+    emit taskMutated(created->id);
+    return QString::number(created->id);
 }
 
 bool ItemModel::renameTask(const QString& id, const QString& title)
@@ -400,6 +530,8 @@ bool ItemModel::renameTask(const QString& id, const QString& title)
     setError({});
     if (updated.id == m_selectedId)
         applySelectedItem(updated);
+    else
+        refreshSelectedTask();
     emit taskMutated(updated.id);
     return true;
 }
@@ -414,6 +546,8 @@ bool ItemModel::setTaskCompleted(const QString& id, bool completed)
         setError({});
         if (stored->id == m_selectedId)
             applySelectedItem(*stored);
+        else
+            refreshSelectedTask();
         emit taskMutated(stored->id);
         return true;
     }
@@ -432,6 +566,8 @@ bool ItemModel::setTaskCompleted(const QString& id, bool completed)
     setError({});
     if (updated.id == m_selectedId)
         applySelectedItem(updated);
+    else
+        refreshSelectedTask();
     emit taskMutated(updated.id);
     return true;
 }
@@ -464,6 +600,8 @@ bool ItemModel::updateTaskField(
     setError({});
     if (updated.id == m_selectedId)
         applySelectedItem(updated);
+    else
+        refreshSelectedTask();
     emit taskMutated(updated.id);
     return true;
 }
@@ -819,14 +957,21 @@ bool ItemModel::deleteTask(const QString& id)
     setError({});
     if (stored->id == m_selectedId)
         clearSelection();
+    else
+        refreshSelectedTask();
     emit taskMutated(stored->id);
     return true;
 }
 
 void ItemModel::syncTask(qlonglong id)
 {
-    if (m_selectedId == 0 || id != m_selectedId)
+    if (m_selectedId == 0)
         return;
+
+    if (id != m_selectedId) {
+        refreshSelectedTask();
+        return;
+    }
 
     ItemRepository items(m_database);
     const std::optional<Item> stored = items.readById(id);

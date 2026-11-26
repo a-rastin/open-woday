@@ -38,6 +38,12 @@ class ItemModel : public QObject
     Q_PROPERTY(QVariantList tags READ tags NOTIFY selectedTaskChanged)
     Q_PROPERTY(QVariantList folders READ folders NOTIFY foldersChanged)
     Q_PROPERTY(QVariantList availableTags READ availableTags NOTIFY availableTagsChanged)
+    Q_PROPERTY(bool hasParent READ hasParent NOTIFY selectedTaskChanged)
+    Q_PROPERTY(QString parentId READ parentId NOTIFY selectedTaskChanged)
+    Q_PROPERTY(QString parentTitle READ parentTitle NOTIFY selectedTaskChanged)
+    Q_PROPERTY(QVariantList subtasks READ subtasks NOTIFY selectedTaskChanged)
+    Q_PROPERTY(int subtaskDone READ subtaskDone NOTIFY selectedTaskChanged)
+    Q_PROPERTY(int subtaskTotal READ subtaskTotal NOTIFY selectedTaskChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 
 public:
@@ -61,10 +67,17 @@ public:
     QVariantList tags() const;
     QVariantList folders() const;
     QVariantList availableTags() const;
+    bool hasParent() const;
+    QString parentId() const;
+    QString parentTitle() const;
+    QVariantList subtasks() const;
+    int subtaskDone() const;
+    int subtaskTotal() const;
     QString error() const;
 
     Q_INVOKABLE bool selectTask(const QString& id);
     Q_INVOKABLE void clearSelection();
+    Q_INVOKABLE QString addSubtask(const QString& parentId, const QString& title);
     Q_INVOKABLE bool renameTask(const QString& id, const QString& title);
     Q_INVOKABLE bool setTaskCompleted(const QString& id, bool completed);
     Q_INVOKABLE bool setTaskPriority(const QString& id, int priority);
@@ -104,6 +117,7 @@ private:
                          const std::function<bool(const Item&)>& unchanged,
                          const std::function<void(Item&, const QString& now)>& apply);
     void applySelectedItem(const Item& item);
+    void refreshSelectedTask();
     void refreshFolders();
     void refreshAvailableTags();
     void setError(const QString& error);
@@ -122,6 +136,11 @@ private:
     QVariantList m_tags;
     QVariantList m_folders;
     QVariantList m_availableTags;
+    std::optional<qlonglong> m_parentId;
+    QString m_parentTitle;
+    QVariantList m_subtasks;
+    int m_subtaskDone = 0;
+    int m_subtaskTotal = 0;
     QString m_error;
 };
 

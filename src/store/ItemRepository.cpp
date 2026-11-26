@@ -357,25 +357,47 @@ bool ItemRepository::softDelete(qlonglong id)
 {
     m_error.clear();
 
-    // Setting deleted_at is the only change needed to retire an Item. Every
-    // normal read filters on deleted_at IS NULL, and the one_day_note_per_day
-    // partial index uses the same predicate, so this UPDATE also drops a Day
-    // note out of that index. The row keeps its day (visible through
-    // readByIdIncludingSoftDeleted) but no longer reserves the date, leaving it
-    // free for a replacement Day note.
-    QSqlQuery query(m_database.connection());
+    // Setting deleted_at is the only change needed to retire an Item and its
+    // active descendant subtasks. Every normal read filters on
+    // deleted_at IS NULL, and the one_day_note_per_day partial index uses the
+    // same predicate, so this UPDATE also drops a Day note out of that index.
+    // Rows keep their fields (visible through readByIdIncludingSoftDeleted)
+    // and never leave orphaned active subtasks behind.
+    QSqlDatabase db = m_database.connection();
+    if (!db.transaction()) {
+        fail(QStringLiteral("could not begin soft-deleting Item %1: %2")
+                 .arg(id).arg(db.lastError().text()));
+        return false;
+    }
+
+    QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "UPDATE items SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL"));
-    query.addBindValue(nowIsoUtc());
+        "WITH RECURSIVE descendants(id) AS ("
+        "  SELECT id FROM items WHERE id = ? AND deleted_at IS NULL "
+        "  UNION "
+        "  SELECT items.id FROM items "
+        "  JOIN descendants ON items.parent_id = descendants.id"
+        ") "
+        "UPDATE items SET deleted_at = ? "
+        "WHERE id IN (SELECT id FROM descendants) AND deleted_at IS NULL"));
     query.addBindValue(id);
+    query.addBindValue(nowIsoUtc());
     if (!query.exec()) {
         fail(QStringLiteral("could not soft-delete Item %1: %2")
                  .arg(id).arg(query.lastError().text()));
+        db.rollback();
         return false;
     }
-    if (query.numRowsAffected() != 1) {
+    if (query.numRowsAffected() < 1) {
         fail(QStringLiteral("Item %1 is absent or already soft-deleted")
                  .arg(id));
+        db.rollback();
+        return false;
+    }
+    if (!db.commit()) {
+        fail(QStringLiteral("could not commit soft-delete for Item %1: %2")
+                 .arg(id).arg(db.lastError().text()));
+        db.rollback();
         return false;
     }
     return true;

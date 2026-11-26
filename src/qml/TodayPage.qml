@@ -4,6 +4,21 @@ import QtQuick.Controls
 Item {
     id: page
     required property Theme theme
+    property var expandedTasks: ({})
+
+    function toggleTaskExpanded(taskId) {
+        const next = Object.assign({}, page.expandedTasks)
+        next[taskId] = !next[taskId]
+        page.expandedTasks = next
+    }
+
+    function expandTask(taskId) {
+        if (page.expandedTasks[taskId])
+            return
+        const next = Object.assign({}, page.expandedTasks)
+        next[taskId] = true
+        page.expandedTasks = next
+    }
 
     Column {
         id: heading
@@ -113,11 +128,20 @@ Item {
                     dueTime: parent.modelData.dueTime !== undefined ? parent.modelData.dueTime : ""
                     folderName: parent.modelData.folderName !== undefined ? parent.modelData.folderName : ""
                     tags: parent.modelData.tags !== undefined ? parent.modelData.tags : []
-                    selected: itemModel.hasSelection && itemModel.selectedId === parent.modelData.id
+                    subtaskDone: parent.modelData.subtaskDone !== undefined ? parent.modelData.subtaskDone : 0
+                    subtaskTotal: parent.modelData.subtaskTotal !== undefined ? parent.modelData.subtaskTotal : 0
+                    subtasks: parent.modelData.subtasks !== undefined ? parent.modelData.subtasks : []
+                    selectedTaskId: itemModel.hasSelection ? itemModel.selectedId : ""
+                    expandedIds: page.expandedTasks
                     onSelectRequested: (id) => itemModel.selectTask(id)
                     onToggleCompletedRequested: (id, nextCompleted) => itemModel.setTaskCompleted(id, nextCompleted)
                     onRenameRequested: (id, newTitle) => itemModel.renameTask(id, newTitle)
                     onDeleteRequested: (id) => itemModel.deleteTask(id)
+                    onToggleExpandRequested: (id) => page.toggleTaskExpanded(id)
+                    onAddSubtaskRequested: (parentId, subtaskTitle) => {
+                        if (itemModel.addSubtask(parentId, subtaskTitle).length > 0)
+                            page.expandTask(parentId)
+                    }
                 }
             }
         }

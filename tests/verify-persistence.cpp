@@ -1513,9 +1513,10 @@ int updatesSurviveRestart()
     return 0;
 }
 
-// Issue 03, slice 5: soft-delete survives a restart. A soft-deleted Item is
-// excluded from normal reads, remains in the file with deleted_at set, and is
-// not cascaded to its subtasks (that rule is behavioural, a later phase).
+// Issue 03, slice 5 (updated in Phase 5, ticket 05): soft-delete survives a
+// restart and atomically cascades deleted_at to all active descendant subtasks
+// inside a single transaction. Normal reads exclude soft-deleted items and
+// subtasks, while the rows remain in the file with deleted_at set.
 int softDeleteSurvivesRestart()
 {
     QTemporaryDir dataDir;
@@ -1525,8 +1526,10 @@ int softDeleteSurvivesRestart()
 
     const QString parentTitle = QStringLiteral("Plan the release");
     const QString subtaskTitle = QStringLiteral("Draft notes");
+    const QString grandchildTitle = QStringLiteral("Verify changelog entries");
     qlonglong parentId = 0;
     qlonglong subtaskId = 0;
+    qlonglong grandchildId = 0;
 
     {
         Database database;
@@ -1560,6 +1563,18 @@ int softDeleteSurvivesRestart()
         }
         subtaskId = createdSubtask->id;
 
+        Item grandchild;
+        grandchild.kind = QStringLiteral("task");
+        grandchild.title = grandchildTitle;
+        grandchild.parentId = subtaskId;
+        grandchild.sortOrder = 3;
+        const std::optional<Item> createdGrandchild = items.create(grandchild);
+        if (!createdGrandchild) {
+            return fail(QStringLiteral("the grandchild subtask could not be created: %1")
+                            .arg(items.lastError()));
+        }
+        grandchildId = createdGrandchild->id;
+
         if (!items.softDelete(parentId)) {
             return fail(QStringLiteral("the Item could not be soft-deleted: %1")
                             .arg(items.lastError()));
@@ -1576,39 +1591,51 @@ int softDeleteSurvivesRestart()
         }
         ItemRepository items(database);
 
-        if (!check(!items.readById(parentId),
+        if (!check(!items.readById(parentId)
+                       && !items.readById(subtaskId)
+                       && !items.readById(grandchildId),
                    QStringLiteral(
-                       "a soft-deleted Item was returned by a normal read"))) {
+                       "a soft-deleted Item or descendant subtask was returned by a normal read"))) {
             return 1;
         }
         const QList<Item> tasks = items.readByKind(QStringLiteral("task"));
-        if (!check(tasks.size() == 1 && tasks.first().id == subtaskId,
+        if (!check(tasks.isEmpty(),
                    QStringLiteral(
-                       "a soft-deleted Item appeared in a normal query"))) {
+                       "a soft-deleted Item or descendant subtask appeared in a normal query"))) {
             return 1;
         }
-        const QList<Item> subtasks = items.readByParent(parentId);
-        if (!check(subtasks.size() == 1 && subtasks.first().id == subtaskId
-                       && subtasks.first().title == subtaskTitle,
-                   QStringLiteral("soft-delete cascaded to the subtask"))) {
+        if (!check(items.readByParent(parentId).isEmpty()
+                       && items.readByParent(subtaskId).isEmpty(),
+                   QStringLiteral("soft-delete did not cascade to all descendant subtasks"))) {
             return 1;
         }
 
-        // A store-layer read observes the row that normal reads hide: proof it
-        // remained in the SQLite file across the restart. This is not a Trash
-        // UI and no product surface is involved.
+        // A store-layer read observes the rows that normal reads hide: proof
+        // they remained in the SQLite file across the restart. This is not a
+        // Trash UI and no product surface is involved.
         const std::optional<Item> stored =
             items.readByIdIncludingSoftDeleted(parentId);
-        if (!check(stored.has_value(),
+        const std::optional<Item> storedSubtask =
+            items.readByIdIncludingSoftDeleted(subtaskId);
+        const std::optional<Item> storedGrandchild =
+            items.readByIdIncludingSoftDeleted(grandchildId);
+        if (!check(stored.has_value() && storedSubtask.has_value()
+                       && storedGrandchild.has_value(),
                    QStringLiteral(
-                       "the soft-deleted row did not remain in the file"))) {
+                       "a soft-deleted row did not remain in the file"))) {
             return 1;
         }
         if (!check(stored->deletedAt.has_value()
                        && QDateTime::fromString(*stored->deletedAt,
+                                                Qt::ISODate).isValid()
+                       && storedSubtask->deletedAt.has_value()
+                       && QDateTime::fromString(*storedSubtask->deletedAt,
+                                                Qt::ISODate).isValid()
+                       && storedGrandchild->deletedAt.has_value()
+                       && QDateTime::fromString(*storedGrandchild->deletedAt,
                                                 Qt::ISODate).isValid(),
                    QStringLiteral(
-                       "deleted_at is not an ISO 8601 soft-delete marker"))) {
+                       "deleted_at is not an ISO 8601 soft-delete marker on the entire subtree"))) {
             return 1;
         }
         if (!check(stored->title == parentTitle
@@ -4941,6 +4968,208 @@ int foldersAndTagsSyncAndPersistAcrossRestart()
     return 0;
 }
 
+int subtasksAndCascadingSoftDeleteSyncAndPersistAcrossRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    QString parentId;
+    QString childOneId;
+    QString childTwoId;
+    QString grandchildId;
+    QString deletedSubtaskId;
+    QString standaloneTaskId;
+    QString standaloneChildId;
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+        QObject::connect(&todayModel, &TodayModel::taskUpdated,
+                         &itemModel, &ItemModel::syncTask);
+
+        if (!todayModel.addTask(QStringLiteral("Prepare release"))
+            || !todayModel.addTask(QStringLiteral("Review docs")))
+            return fail(QStringLiteral("could not seed Tasks for subtask test"));
+
+        const QVariantList initialLines = todayModel.lines();
+        if (!check(initialLines.size() == 2,
+                   QStringLiteral("seeded Tasks missing from Today")))
+            return 1;
+
+        parentId = initialLines.at(0).toMap().value(QStringLiteral("id")).toString();
+        standaloneTaskId = initialLines.at(1).toMap().value(QStringLiteral("id")).toString();
+
+        // Invalid subtask creation fails cleanly with diagnostics.
+        if (!check(itemModel.addSubtask(parentId, QStringLiteral("   ")).isEmpty()
+                       && !itemModel.error().isEmpty(),
+                   QStringLiteral("blank subtask creation was not rejected")))
+            return 1;
+        if (!check(itemModel.addSubtask(QStringLiteral("999999"), QStringLiteral("Orphan")).isEmpty()
+                       && !itemModel.error().isEmpty(),
+                   QStringLiteral("subtask creation on missing parent was not rejected")))
+            return 1;
+
+        // Select parent and create 3 levels of nested subtasks.
+        if (!check(itemModel.selectTask(parentId)
+                       && !itemModel.hasParent()
+                       && itemModel.parentId().isEmpty()
+                       && itemModel.subtaskTotal() == 0
+                       && itemModel.subtaskDone() == 0
+                       && itemModel.subtasks().isEmpty(),
+                   QStringLiteral("parent Task initial subtask state was unexpected")))
+            return 1;
+
+        childOneId = itemModel.addSubtask(parentId, QStringLiteral("Build Linux binary"));
+        childTwoId = itemModel.addSubtask(parentId, QStringLiteral("Write changelog"));
+        deletedSubtaskId = itemModel.addSubtask(parentId, QStringLiteral("Temporary check"));
+        if (!check(!childOneId.isEmpty() && !childTwoId.isEmpty() && !deletedSubtaskId.isEmpty()
+                       && itemModel.error().isEmpty()
+                       && itemModel.subtaskTotal() == 3
+                       && itemModel.subtaskDone() == 0
+                       && itemModel.subtasks().size() == 3,
+                   QStringLiteral("creating child subtasks did not update selected parent")))
+            return 1;
+
+        // Add depth-2 and depth-3 descendants under childOne.
+        grandchildId = itemModel.addSubtask(childOneId, QStringLiteral("Run qmake6"));
+        const QString greatGrandchildId =
+            itemModel.addSubtask(grandchildId, QStringLiteral("Archive artifact"));
+        if (!check(!grandchildId.isEmpty() && !greatGrandchildId.isEmpty(),
+                   QStringLiteral("creating multi-level nested subtasks failed")))
+            return 1;
+
+        // Complete childOne, rename childTwo, and schedule childTwo on Today:
+        // Today must show childTwo nested under parentId without duplicating it
+        // as an unrelated top-level root Task.
+        if (!check(itemModel.setTaskCompleted(childOneId, true)
+                       && itemModel.renameTask(childTwoId, QStringLiteral("Polish changelog"))
+                       && itemModel.setTaskDueDate(childTwoId, todayModel.selectedDate()),
+                   QStringLiteral("updating subtasks failed")))
+            return 1;
+
+        // Also delete one leaf subtask while parentId is selected: parent stays
+        // open and reflects 1/2 progress immediately.
+        if (!check(itemModel.deleteTask(deletedSubtaskId)
+                       && itemModel.hasSelection()
+                       && itemModel.selectedId() == parentId
+                       && itemModel.subtaskTotal() == 2
+                       && itemModel.subtaskDone() == 1
+                       && itemModel.subtasks().size() == 2,
+                   QStringLiteral("deleting a leaf subtask did not refresh parent cleanly")))
+            return 1;
+
+        // Today should have 2 top-level Tasks (Prepare release, Review docs),
+        // not 3 (childTwo must not be duplicated at top level).
+        const QVariantList linesAfterSubtasks = todayModel.lines();
+        if (!check(todayModel.taskCount() == 2 && linesAfterSubtasks.size() == 2,
+                   QStringLiteral("nested subtasks duplicated top-level Today lines")))
+            return 1;
+
+        const QVariantMap parentRow = linesAfterSubtasks.at(0).toMap();
+        const QVariantList nestedChildren = parentRow.value(QStringLiteral("subtasks")).toList();
+        const QVariantMap firstChildRow = nestedChildren.at(0).toMap();
+        const QVariantList grandchildren = firstChildRow.value(QStringLiteral("subtasks")).toList();
+        const QVariantList greatGrandchildren =
+            grandchildren.at(0).toMap().value(QStringLiteral("subtasks")).toList();
+        if (!check(parentRow.value(QStringLiteral("subtaskDone")).toInt() == 1
+                       && parentRow.value(QStringLiteral("subtaskTotal")).toInt() == 2
+                       && nestedChildren.size() == 2
+                       && nestedChildren.at(1).toMap().value(QStringLiteral("title")).toString()
+                           == QStringLiteral("Polish changelog")
+                       && grandchildren.size() == 1
+                       && grandchildren.at(0).toMap().value(QStringLiteral("id")).toString()
+                           == grandchildId
+                       && greatGrandchildren.size() == 1
+                       && greatGrandchildren.at(0).toMap().value(QStringLiteral("id")).toString()
+                           == greatGrandchildId,
+                   QStringLiteral("TodayModel did not expose accurate nested subtask tree and counts")))
+            return 1;
+
+        // Navigate into a nested subtask in ItemModel and verify parent metadata.
+        if (!check(itemModel.selectTask(grandchildId)
+                       && itemModel.hasSelection()
+                       && itemModel.selectedId() == grandchildId
+                       && itemModel.hasParent()
+                       && itemModel.parentId() == childOneId
+                       && itemModel.parentTitle() == QStringLiteral("Build Linux binary")
+                       && itemModel.subtaskTotal() == 1,
+                   QStringLiteral("navigating into nested subtask did not populate parent and child state")))
+            return 1;
+
+        // Soft-delete ancestor parentId while grandchildId is open: detail pane
+        // must close and the entire subtree must disappear from Today immediately.
+        if (!check(itemModel.deleteTask(parentId)
+                       && !itemModel.hasSelection()
+                       && itemModel.selectedId().isEmpty()
+                       && todayModel.taskCount() == 1
+                       && todayModel.lines().size() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString()
+                           == standaloneTaskId,
+                   QStringLiteral("cascading ancestor soft-delete did not close descendant pane or clear Today")))
+            return 1;
+
+        // Add a surviving subtask tree on standaloneTaskId to verify restart survival.
+        standaloneChildId = itemModel.addSubtask(standaloneTaskId, QStringLiteral("Verify examples"));
+        const QString standaloneGrandchildId =
+            itemModel.addSubtask(standaloneChildId, QStringLiteral("Check links"));
+        if (!check(!standaloneChildId.isEmpty() && !standaloneGrandchildId.isEmpty()
+                       && itemModel.setTaskCompleted(standaloneGrandchildId, true),
+                   QStringLiteral("seeding surviving nested subtasks failed")))
+            return 1;
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        ItemRepository items(database);
+
+        // Deleted ancestor and all descendants remain excluded across restart.
+        if (!check(!items.readById(parentId.toLongLong())
+                       && !items.readById(childOneId.toLongLong())
+                       && !items.readById(childTwoId.toLongLong())
+                       && !items.readById(grandchildId.toLongLong())
+                       && !items.readById(deletedSubtaskId.toLongLong()),
+                   QStringLiteral("soft-deleted ancestor or descendant subtask remained active after restart")))
+            return 1;
+
+        // Surviving Task and its multi-depth subtasks survive restart intact.
+        if (!check(todayModel.taskCount() == 1 && todayModel.lines().size() == 1,
+                   QStringLiteral("Today task count changed across restart")))
+            return 1;
+        const QVariantMap survivingRow = todayModel.lines().at(0).toMap();
+        const QVariantList survivingChildren = survivingRow.value(QStringLiteral("subtasks")).toList();
+        if (!check(survivingRow.value(QStringLiteral("subtaskDone")).toInt() == 0
+                       && survivingRow.value(QStringLiteral("subtaskTotal")).toInt() == 1
+                       && survivingChildren.size() == 1
+                       && survivingChildren.at(0).toMap().value(QStringLiteral("subtaskDone")).toInt() == 1
+                       && survivingChildren.at(0).toMap().value(QStringLiteral("subtaskTotal")).toInt() == 1,
+                   QStringLiteral("surviving nested subtask progress did not survive restart")))
+            return 1;
+
+        if (!check(itemModel.selectTask(standaloneChildId)
+                       && itemModel.hasParent()
+                       && itemModel.parentId() == standaloneTaskId
+                       && itemModel.subtaskDone() == 1
+                       && itemModel.subtaskTotal() == 1
+                       && itemModel.subtasks().size() == 1,
+                   QStringLiteral("ItemModel did not reload nested subtask state after restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -5147,6 +5376,9 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (foldersAndTagsSyncAndPersistAcrossRestart() != 0) {
+        return 1;
+    }
+    if (subtasksAndCascadingSoftDeleteSyncAndPersistAcrossRestart() != 0) {
         return 1;
     }
 

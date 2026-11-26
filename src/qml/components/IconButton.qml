@@ -6,7 +6,7 @@ AbstractButton {
     id: control
 
     required property Theme theme
-    // Supported geometric icons: "close", "edit", "delete". Falls back to glyph text.
+    // Supported geometric icons: "close", "edit", "delete", "add". Falls back to glyph text.
     property string iconKind: ""
     property string glyph: ""
     property bool destructive: false
@@ -122,6 +122,29 @@ AbstractButton {
                 color: "transparent"
                 border.color: control.iconColor
                 border.width: 1.4
+            }
+        }
+
+        // Add icon ("+")
+        Item {
+            anchors.centerIn: parent
+            width: 12
+            height: 12
+            visible: control.iconKind === "add"
+
+            Rectangle {
+                anchors.centerIn: parent
+                width: 11
+                height: 1.5
+                radius: 0.75
+                color: control.iconColor
+            }
+            Rectangle {
+                anchors.centerIn: parent
+                width: 1.5
+                height: 11
+                radius: 0.75
+                color: control.iconColor
             }
         }
 

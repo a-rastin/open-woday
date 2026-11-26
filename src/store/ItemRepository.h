@@ -76,9 +76,10 @@ public:
     // Returns false and sets lastError() on failure.
     bool update(const Item& item);
 
-    // Soft-delete via deleted_at. There is no hard delete and no Trash UI, and
-    // subtasks are not cascaded in this phase (that rule is behavioural and
-    // belongs to a later phase).
+    // Soft-delete via deleted_at. Atomically sets deleted_at on the target
+    // Item and all of its active descendant subtasks (parent_id chain at
+    // arbitrary depth) inside a single database transaction. There is no hard
+    // delete and no Trash UI.
     bool softDelete(qlonglong id);
 
 private:
