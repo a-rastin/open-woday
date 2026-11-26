@@ -6317,6 +6317,189 @@ int eventMetadataAndModelSchedulingHelpersSurviveRestart()
     return 0;
 }
 
+int itemModelRetainsStateOnRelatedReadFailure()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+    Database database;
+    if (!database.open())
+        return fail(database.lastError());
+
+    FolderRepository folders(database);
+    TagRepository tags(database);
+    ItemRepository items(database);
+    BlockRepository blocks(database);
+
+    const auto folderA = folders.create(QStringLiteral("Alpha"));
+    const auto folderB = folders.create(QStringLiteral("Beta"));
+    const auto tagA = tags.create(QStringLiteral("urgent"));
+    const auto tagB = tags.create(QStringLiteral("later"));
+    if (!folderA || !folderB || !tagA || !tagB)
+        return fail(QStringLiteral("could not seed Folders/Tags for ItemModel failure test"));
+
+    const auto parentA = items.create(QStringLiteral("task"), QStringLiteral("Parent A"));
+    const auto parentB = items.create(QStringLiteral("task"), QStringLiteral("Parent B"));
+    if (!parentA || !parentB)
+        return fail(items.lastError());
+
+    Item taskA;
+    taskA.kind = QStringLiteral("task");
+    taskA.title = QStringLiteral("Task A");
+    taskA.folderId = folderA->id;
+    taskA.parentId = parentA->id;
+    const auto createdA = items.create(taskA);
+
+    Item taskB;
+    taskB.kind = QStringLiteral("task");
+    taskB.title = QStringLiteral("Task B");
+    taskB.folderId = folderB->id;
+    taskB.parentId = parentB->id;
+    const auto createdB = items.create(taskB);
+    if (!createdA || !createdB)
+        return fail(items.lastError());
+
+    if (!tags.attachToItem(createdA->id, tagA->id)
+        || !tags.attachToItem(createdB->id, tagB->id))
+        return fail(tags.lastError());
+
+    Item childA;
+    childA.kind = QStringLiteral("task");
+    childA.title = QStringLiteral("Child A");
+    childA.parentId = createdA->id;
+    const auto createdChildA = items.create(childA);
+
+    Item childB;
+    childB.kind = QStringLiteral("task");
+    childB.title = QStringLiteral("Child B");
+    childB.parentId = createdB->id;
+    const auto createdChildB = items.create(childB);
+    if (!createdChildA || !createdChildB)
+        return fail(items.lastError());
+
+    Item grandA;
+    grandA.kind = QStringLiteral("task");
+    grandA.title = QStringLiteral("Grandchild A");
+    grandA.parentId = createdChildA->id;
+    grandA.completedAt = QStringLiteral("2026-11-25T10:00:00Z");
+
+    Item grandB;
+    grandB.kind = QStringLiteral("task");
+    grandB.title = QStringLiteral("Grandchild B");
+    grandB.parentId = createdChildB->id;
+    if (!items.create(grandA) || !items.create(grandB))
+        return fail(items.lastError());
+
+    if (!blocks.replaceText(createdA->id, QStringLiteral("Note A"))
+        || !blocks.replaceText(createdB->id, QStringLiteral("Note B")))
+        return fail(blocks.lastError());
+
+    ItemModel model(database);
+    const QString idA = QString::number(createdA->id);
+    const QString idB = QString::number(createdB->id);
+    if (!check(model.selectTask(idA)
+                   && model.selectedId() == idA
+                   && model.title() == QStringLiteral("Task A")
+                   && model.folderName() == QStringLiteral("Alpha")
+                   && model.tags().size() == 1
+                   && model.parentTitle() == QStringLiteral("Parent A")
+                   && model.subtasks().size() == 1
+                   && model.subtaskTotal() == 1
+                   && model.noteText() == QStringLiteral("Note A"),
+               QStringLiteral("could not select baseline Task A")))
+        return 1;
+
+    const QVariantList originalTags = model.tags();
+    const QVariantList originalSubtasks = model.subtasks();
+
+    int selectionSignals = 0;
+    int taskSignals = 0;
+    QObject::connect(&model, &ItemModel::selectionChanged,
+                     [&selectionSignals] { ++selectionSignals; });
+    QObject::connect(&model, &ItemModel::selectedTaskChanged,
+                     [&taskSignals] { ++taskSignals; });
+
+    QVariant handle = database.connection().driver()->handle();
+    if (!check(handle.isValid() && qstrcmp(handle.typeName(), "sqlite3*") == 0,
+               QStringLiteral("SQLite handle unavailable")))
+        return 1;
+    sqlite3* sqlite = *static_cast<sqlite3**>(handle.data());
+
+    struct SelectFailState {
+        int current = 0;
+        int failOn = 0;
+    };
+    auto denyNthSelect = [](void* data, int action, const char*, const char*,
+                            const char*, const char*) -> int {
+        auto* state = static_cast<SelectFailState*>(data);
+        if (action == SQLITE_SELECT && ++state->current == state->failOn)
+            return SQLITE_DENY;
+        return SQLITE_OK;
+    };
+
+    // SELECT 1: items.readById(taskB) in readTask
+    // SELECT 2: folders.readById in applySelectedItem
+    // SELECT 3: tagRepo.readForItem in applySelectedItem
+    // SELECT 4: itemRepo.readById(parent) in applySelectedItem
+    // SELECT 5: itemRepo.readByParent(taskB) in applySelectedItem
+    // SELECT 6: itemRepo.readByParent(childB) in applySelectedItem
+    for (int failSelect = 2; failSelect <= 6; ++failSelect) {
+        SelectFailState state{0, failSelect};
+        sqlite3_set_authorizer(sqlite, denyNthSelect, &state);
+        const bool selected = model.selectTask(idB);
+        sqlite3_set_authorizer(sqlite, nullptr, nullptr);
+
+        if (!check(!selected
+                       && state.current >= failSelect
+                       && !model.error().isEmpty()
+                       && model.selectedId() == idA
+                       && model.title() == QStringLiteral("Task A")
+                       && model.folderName() == QStringLiteral("Alpha")
+                       && model.tags() == originalTags
+                       && model.parentTitle() == QStringLiteral("Parent A")
+                       && model.subtasks() == originalSubtasks
+                       && model.subtaskDone() == 0
+                       && model.subtaskTotal() == 1
+                       && model.noteText() == QStringLiteral("Note A")
+                       && selectionSignals == 0
+                       && taskSignals == 0,
+                   QStringLiteral("failed related read #%1 mutated state or cleared error")
+                       .arg(failSelect)))
+            return 1;
+    }
+
+    // Also verify syncTask retains selected-task state when a related read fails.
+    SelectFailState syncState{0, 2};
+    sqlite3_set_authorizer(sqlite, denyNthSelect, &syncState);
+    model.syncTask(createdA->id);
+    sqlite3_set_authorizer(sqlite, nullptr, nullptr);
+    if (!check(!model.error().isEmpty()
+                   && model.selectedId() == idA
+                   && model.folderName() == QStringLiteral("Alpha")
+                   && model.tags() == originalTags
+                   && model.parentTitle() == QStringLiteral("Parent A")
+                   && model.subtasks() == originalSubtasks
+                   && selectionSignals == 0
+                   && taskSignals == 0,
+               QStringLiteral("syncTask replaced selected state on related read failure")))
+        return 1;
+
+    // A subsequent healthy selectTask succeeds and clears the error.
+    if (!check(model.selectTask(idB)
+                   && model.error().isEmpty()
+                   && model.selectedId() == idB
+                   && model.title() == QStringLiteral("Task B")
+                   && model.folderName() == QStringLiteral("Beta")
+                   && model.parentTitle() == QStringLiteral("Parent B")
+                   && model.tags().size() == 1
+                   && model.subtasks().size() == 1
+                   && model.noteText() == QStringLiteral("Note B"),
+               QStringLiteral("healthy selectTask after failure did not recover cleanly")))
+        return 1;
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -6547,6 +6730,9 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (eventMetadataAndModelSchedulingHelpersSurviveRestart() != 0) {
+        return 1;
+    }
+    if (itemModelRetainsStateOnRelatedReadFailure() != 0) {
         return 1;
     }
 

@@ -287,16 +287,24 @@ std::optional<Item> ItemModel::readTask(const QString& id)
     return stored;
 }
 
-void ItemModel::applySelectedItem(const Item& item)
+bool ItemModel::applySelectedItem(const Item& item)
 {
     const bool idChanged = (m_selectedId != item.id);
     const bool nextCompleted = item.completedAt.has_value();
     const DueFields due = extractDueFields(item);
+    auto failIfRepoError = [this](const StoreRepository& repo) {
+        if (repo.lastError().isEmpty())
+            return false;
+        setError(repo.lastError());
+        return true;
+    };
 
     QString nextFolderName;
     if (item.folderId && *item.folderId > 0) {
         FolderRepository folders(m_database);
         const std::optional<Folder> folder = folders.readById(*item.folderId);
+        if (failIfRepoError(folders))
+            return false;
         if (folder)
             nextFolderName = folder->name;
     }
@@ -304,6 +312,8 @@ void ItemModel::applySelectedItem(const Item& item)
     QVariantList nextTags;
     TagRepository tagRepo(m_database);
     const QList<Tag> storedTags = tagRepo.readForItem(item.id);
+    if (failIfRepoError(tagRepo))
+        return false;
     nextTags.reserve(storedTags.size());
     for (const Tag& tag : storedTags) {
         nextTags.append(tagToMap(tag));
@@ -313,11 +323,15 @@ void ItemModel::applySelectedItem(const Item& item)
     QString nextParentTitle;
     if (item.parentId && *item.parentId > 0) {
         const std::optional<Item> parent = itemRepo.readById(*item.parentId);
+        if (failIfRepoError(itemRepo))
+            return false;
         if (parent)
             nextParentTitle = parent->title;
     }
 
     const QList<Item> childItems = itemRepo.readByParent(item.id);
+    if (failIfRepoError(itemRepo))
+        return false;
     QVariantList nextSubtasks;
     nextSubtasks.reserve(childItems.size());
     int nextSubtaskDone = 0;
@@ -331,6 +345,8 @@ void ItemModel::applySelectedItem(const Item& item)
             ++nextSubtaskDone;
 
         const QList<Item> grandChildren = itemRepo.readByParent(child.id);
+        if (failIfRepoError(itemRepo))
+            return false;
         int grandDone = 0;
         int grandTotal = 0;
         for (const Item& grand : grandChildren) {
@@ -389,6 +405,7 @@ void ItemModel::applySelectedItem(const Item& item)
         emit selectionChanged();
     if (taskChanged)
         emit selectedTaskChanged();
+    return true;
 }
 
 void ItemModel::refreshSelectedTask()
@@ -526,8 +543,9 @@ bool ItemModel::selectTask(const QString& id)
     }
 
     setError({});
+    if (!applySelectedItem(*stored))
+        return false;
     loadTaskNote(stored->id);
-    applySelectedItem(*stored);
     return true;
 }
 

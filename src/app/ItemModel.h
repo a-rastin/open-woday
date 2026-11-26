@@ -141,7 +141,7 @@ private:
     bool updateTaskField(const QString& id,
                          const std::function<bool(const Item&)>& unchanged,
                          const std::function<void(Item&, const QString& now)>& apply);
-    void applySelectedItem(const Item& item);
+    bool applySelectedItem(const Item& item);
     void refreshSelectedTask();
     void refreshFolders();
     void refreshAvailableTags();
