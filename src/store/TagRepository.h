@@ -53,6 +53,11 @@ public:
 
     // Read all Tags attached to a given Item, ordered by name, then id.
     QList<Tag> readForItem(qlonglong itemId);
+
+private:
+    std::optional<Tag> insertTag(const QString& trimmedName,
+                                 const std::optional<QString>& colour,
+                                 const std::optional<QString>& icon);
 };
 
 #endif // OPENWODAY_STORE_TAGREPOSITORY_H

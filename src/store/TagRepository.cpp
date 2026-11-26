@@ -39,8 +39,68 @@ std::optional<Tag> TagRepository::create(const QString& name,
         return std::nullopt;
     }
 
+    const std::optional<Tag> existing = findByName(trimmed);
+    if (!m_error.isEmpty()) {
+        return std::nullopt;
+    }
+    if (existing) {
+        fail(QStringLiteral("a Tag named '%1' already exists")
+                 .arg(existing->name));
+        return std::nullopt;
+    }
+
+    return insertTag(trimmed, colour, icon);
+}
+
+std::optional<Tag> TagRepository::findByName(const QString& name)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) {
+        m_error.clear();
+        return std::nullopt;
+    }
+
+    const QList<Tag> tags = selectRows<Tag>(
+        QStringLiteral("SELECT id, name, colour, icon FROM tags "
+                       "WHERE name = ? COLLATE NOCASE "
+                       "ORDER BY id"),
+        QVariantList{ QVariant(trimmed) },
+        QStringLiteral("could not look up the Tag"),
+        tagFromQuery);
+    if (tags.isEmpty()) {
+        return std::nullopt;
+    }
+    return tags.first();
+}
+
+std::optional<Tag> TagRepository::findOrCreate(const QString& name,
+                                               const std::optional<QString>& colour,
+                                               const std::optional<QString>& icon)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) {
+        fail(QStringLiteral("Tag name cannot be empty."));
+        return std::nullopt;
+    }
+
+    const std::optional<Tag> existing = findByName(trimmed);
+    if (!m_error.isEmpty()) {
+        return std::nullopt;
+    }
+    if (existing) {
+        return existing;
+    }
+    return insertTag(trimmed, colour, icon);
+}
+
+std::optional<Tag> TagRepository::insertTag(const QString& trimmedName,
+                                            const std::optional<QString>& colour,
+                                            const std::optional<QString>& icon)
+{
+    m_error.clear();
+
     Tag stored;
-    stored.name = trimmed;
+    stored.name = trimmedName;
     stored.colour = colour;
     stored.icon = icon;
 
@@ -69,45 +129,6 @@ std::optional<Tag> TagRepository::create(const QString& name,
 
     stored.id = insertedId.toLongLong();
     return stored;
-}
-
-std::optional<Tag> TagRepository::findByName(const QString& name)
-{
-    const QString trimmed = name.trimmed();
-    if (trimmed.isEmpty()) {
-        m_error.clear();
-        return std::nullopt;
-    }
-
-    const QList<Tag> tags = selectRows<Tag>(
-        QStringLiteral("SELECT id, name, colour, icon FROM tags WHERE name = ?"),
-        QVariantList{ QVariant(trimmed) },
-        QStringLiteral("could not look up the Tag"),
-        tagFromQuery);
-    if (tags.isEmpty()) {
-        return std::nullopt;
-    }
-    return tags.first();
-}
-
-std::optional<Tag> TagRepository::findOrCreate(const QString& name,
-                                               const std::optional<QString>& colour,
-                                               const std::optional<QString>& icon)
-{
-    const QString trimmed = name.trimmed();
-    if (trimmed.isEmpty()) {
-        fail(QStringLiteral("Tag name cannot be empty."));
-        return std::nullopt;
-    }
-
-    const std::optional<Tag> existing = findByName(trimmed);
-    if (!m_error.isEmpty()) {
-        return std::nullopt;
-    }
-    if (existing) {
-        return existing;
-    }
-    return create(trimmed, colour, icon);
 }
 
 std::optional<Tag> TagRepository::readById(qlonglong id)

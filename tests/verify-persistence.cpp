@@ -4715,15 +4715,27 @@ int folderAndTagRepositoriesSurviveRestart()
         focusTagId = focus->id;
         healthTagId = health->id;
 
-        // Creating a duplicate Tag by unique name fails cleanly; findOrCreate returns existing.
+        // Creating a duplicate Tag by unique name fails cleanly; findOrCreate returns existing
+        // (including lookups that differ only in case).
         if (!check(!tags.create(QStringLiteral("Focus")) && !tags.lastError().isEmpty(),
                    QStringLiteral("duplicate Tag creation was not rejected")))
             return 1;
+        if (!check(!tags.create(QStringLiteral("focus")) && !tags.lastError().isEmpty(),
+                   QStringLiteral("case-variant duplicate Tag creation was not rejected")))
+            return 1;
 
         const auto reused = tags.findOrCreate(QStringLiteral("Focus"));
+        const auto reusedLower = tags.findOrCreate(QStringLiteral("focus"));
+        const auto reusedUpper = tags.findOrCreate(QStringLiteral("FOCUS"));
+        const auto foundMixed = tags.findByName(QStringLiteral("fOcUs"));
         if (!check(reused && reused->id == focusTagId
-                       && reused->colour == std::optional<QString>(QStringLiteral("#3B82F6")),
-                   QStringLiteral("findOrCreate did not return existing Tag by unique name")))
+                       && reused->colour == std::optional<QString>(QStringLiteral("#3B82F6"))
+                       && reusedLower && reusedLower->id == focusTagId
+                       && reusedLower->name == QStringLiteral("Focus")
+                       && reusedUpper && reusedUpper->id == focusTagId
+                       && foundMixed && foundMixed->id == focusTagId
+                       && tags.readAll().size() == 2,
+                   QStringLiteral("findOrCreate or findByName did not match existing Tag case-insensitively")))
             return 1;
 
         Item task;
@@ -4907,8 +4919,9 @@ int foldersAndTagsSyncAndPersistAcrossRestart()
             std::swap(focusTagId, urgentTagId);
         }
 
-        // Reuse existing Tag on second Task without duplicating in availableTags.
-        if (!check(itemModel.attachTagByName(secondId, QStringLiteral("Focus"))
+        // Reuse existing Tag on second Task (even with different casing) without duplicating in availableTags.
+        if (!check(itemModel.attachTagByName(secondId, QStringLiteral("focus"))
+                       && itemModel.createTag(QStringLiteral("URGENT")) == urgentTagId
                        && itemModel.availableTags().size() == 2
                        && todayModel.lines().at(0).toMap().value(QStringLiteral("tags")).toList().size() == 2
                        && todayModel.lines().at(1).toMap().value(QStringLiteral("tags")).toList().size() == 1,
