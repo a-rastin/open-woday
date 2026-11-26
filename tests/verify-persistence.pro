@@ -1,4 +1,4 @@
-# The single high-level persistence seam for Phase 2 (issues 02, 03, 04 and 05).
+# The single high-level persistence seam (Phases 2-5).
 # Framework-free by design: no test framework, no CI configuration, no CMake.
 # Run locally from tests/: qmake6 verify-persistence.pro && make && ./verify-persistence
 TEMPLATE = app

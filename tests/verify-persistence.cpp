@@ -5530,6 +5530,301 @@ int taskNotePlainTextGuardAndFailureSafety()
     return 0;
 }
 
+int phase5TaskCrudMergeGateSurvivesRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    const QString today = QDate::currentDate().toString(Qt::ISODate);
+    const QString tomorrow = QDate::currentDate().addDays(1).toString(Qt::ISODate);
+    const QString dayNoteText = QStringLiteral("Focus on Phase 5 merge gate");
+    const QString taskNoteText = QStringLiteral("Checklist\nVerify restart survival");
+
+    QString primaryId;
+    QString secondaryId;
+    QString undatedId;
+    QString formattedId;
+    QString legacyAncestorId;
+    QString legacyChildId;
+    QString legacyGrandchildId;
+    QString childOneId;
+    QString childTwoId;
+    QString grandchildId;
+    QString engineeringFolderId;
+    QString focusTagId;
+    QString releaseTagId;
+    QString tempTagId;
+    qlonglong eventId = 0;
+    qlonglong formattedBlockId = 0;
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+        QObject::connect(&todayModel, &TodayModel::taskUpdated,
+                         &itemModel, &ItemModel::syncTask);
+
+        ItemRepository items(database);
+        BlockRepository blocks(database);
+
+        Item event;
+        event.kind = QStringLiteral("event");
+        event.title = QStringLiteral("Design sync");
+        event.startAt = today + QStringLiteral("T11:00:00");
+        const auto createdEvent = items.create(event);
+        if (!createdEvent)
+            return fail(items.lastError());
+        eventId = createdEvent->id;
+
+        todayModel.setDayNoteText(dayNoteText);
+        if (!todayModel.flushDayNote())
+            return fail(todayModel.dayNoteError());
+
+        if (!todayModel.addTask(QStringLiteral("Draft v0.1 spec"))
+            || !todayModel.addTask(QStringLiteral("Archive old branch"))
+            || !todayModel.addTask(QStringLiteral("Scratch undated"))
+            || !todayModel.addTask(QStringLiteral("Formatted Task"))
+            || !todayModel.addTask(QStringLiteral("Legacy cleanup"))) {
+            return fail(QStringLiteral("could not seed Tasks for Phase 5 merge gate"));
+        }
+
+        const QVariantList initialLines = todayModel.lines();
+        if (!check(initialLines.size() == 6 && todayModel.taskCount() == 5
+                       && todayModel.eventCount() == 1,
+                   QStringLiteral("Phase 5 merge gate initial Today counts mismatch")))
+            return 1;
+
+        primaryId = initialLines.at(0).toMap().value(QStringLiteral("id")).toString();
+        secondaryId = initialLines.at(1).toMap().value(QStringLiteral("id")).toString();
+        undatedId = initialLines.at(2).toMap().value(QStringLiteral("id")).toString();
+        formattedId = initialLines.at(3).toMap().value(QStringLiteral("id")).toString();
+        legacyAncestorId = initialLines.at(4).toMap().value(QStringLiteral("id")).toString();
+
+        // Create, select, rename, set priority & duration, schedule day + 24-hour time.
+        if (!check(itemModel.selectTask(primaryId)
+                       && itemModel.renameTask(primaryId, QStringLiteral("Ship Task lifecycle"))
+                       && itemModel.setTaskPriority(primaryId, 3)
+                       && itemModel.setTaskDuration(primaryId, 45)
+                       && itemModel.setTaskDueDate(primaryId, tomorrow)
+                       && todayModel.taskCount() == 4,
+                   QStringLiteral("rescheduling Task off Today did not update TodayModel immediately")))
+            return 1;
+
+        todayModel.selectDate(tomorrow);
+        if (!check(todayModel.taskCount() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString()
+                           == primaryId,
+                   QStringLiteral("rescheduled Task did not appear on Tomorrow")))
+            return 1;
+        todayModel.selectDate(today);
+
+        if (!check(itemModel.setTaskDueDateTime(primaryId, today, QStringLiteral("14:30"))
+                       && itemModel.hasDueDate() && itemModel.dueDate() == today
+                       && itemModel.hasDueTime() && itemModel.dueTime() == QStringLiteral("14:30")
+                       && todayModel.taskCount() == 5,
+                   QStringLiteral("rescheduling Task back to Today with 24-hour time failed")))
+            return 1;
+
+        // Clear due date on undatedId so it leaves Today immediately.
+        if (!check(itemModel.clearTaskDueDate(undatedId)
+                       && todayModel.taskCount() == 4,
+                   QStringLiteral("clearing due date did not remove Task from Today")))
+            return 1;
+
+        // Create/assign/clear Folders and create/attach/detach Tags.
+        engineeringFolderId = itemModel.createFolder(QStringLiteral("Engineering"));
+        const QString personalFolderId = itemModel.createFolder(QStringLiteral("Personal"));
+        if (!check(!engineeringFolderId.isEmpty() && !personalFolderId.isEmpty()
+                       && itemModel.setTaskFolder(primaryId, engineeringFolderId)
+                       && itemModel.setTaskFolder(secondaryId, personalFolderId)
+                       && itemModel.clearTaskFolder(secondaryId)
+                       && itemModel.folderName() == QStringLiteral("Engineering"),
+                   QStringLiteral("Folder create, assign, or clear failed")))
+            return 1;
+
+        if (!check(itemModel.attachTagByName(primaryId, QStringLiteral("Focus"))
+                       && itemModel.attachTagByName(primaryId, QStringLiteral("Release"))
+                       && itemModel.attachTagByName(primaryId, QStringLiteral("Temporary"))
+                       && itemModel.tags().size() == 3,
+                   QStringLiteral("Tag creation or attachment failed")))
+            return 1;
+
+        for (const QVariant& entry : itemModel.tags()) {
+            const QVariantMap tagMap = entry.toMap();
+            const QString name = tagMap.value(QStringLiteral("name")).toString();
+            const QString id = tagMap.value(QStringLiteral("id")).toString();
+            if (name == QStringLiteral("Focus"))
+                focusTagId = id;
+            else if (name == QStringLiteral("Release"))
+                releaseTagId = id;
+            else if (name == QStringLiteral("Temporary"))
+                tempTagId = id;
+        }
+        if (!check(!focusTagId.isEmpty() && !releaseTagId.isEmpty() && !tempTagId.isEmpty()
+                       && itemModel.detachTag(primaryId, tempTagId)
+                       && itemModel.tags().size() == 2,
+                   QStringLiteral("Tag detachment failed")))
+            return 1;
+
+        // Complete and reopen primary Task, and add multi-level subtasks with done/total.
+        if (!check(itemModel.setTaskCompleted(primaryId, true)
+                       && itemModel.completed()
+                       && itemModel.setTaskCompleted(primaryId, false)
+                       && !itemModel.completed(),
+                   QStringLiteral("Task complete/reopen failed")))
+            return 1;
+
+        childOneId = itemModel.addSubtask(primaryId, QStringLiteral("Write tests"));
+        childTwoId = itemModel.addSubtask(primaryId, QStringLiteral("Verify UI"));
+        grandchildId = itemModel.addSubtask(childOneId, QStringLiteral("Check restart"));
+        if (!check(!childOneId.isEmpty() && !childTwoId.isEmpty() && !grandchildId.isEmpty()
+                       && itemModel.setTaskCompleted(grandchildId, true)
+                       && itemModel.setTaskCompleted(childOneId, true)
+                       && itemModel.subtaskDone() == 1
+                       && itemModel.subtaskTotal() == 2,
+                   QStringLiteral("multi-level subtask nesting or done/total count failed")))
+            return 1;
+
+        // Edit Task's own plain-text Note scaffold.
+        itemModel.setNoteText(taskNoteText);
+        if (!check(itemModel.flushNote()
+                       && itemModel.noteEditable()
+                       && itemModel.noteText() == taskNoteText
+                       && todayModel.dayNoteText() == dayNoteText,
+                   QStringLiteral("Task Note scaffold flush or Day note isolation failed")))
+            return 1;
+
+        // Guard non-plain-text Block on formattedId using BlockRepository::isPlainText.
+        Block heading;
+        heading.itemId = formattedId.toLongLong();
+        heading.type = QStringLiteral("heading");
+        heading.content = QStringLiteral("Protected Heading");
+        const auto storedHeading = blocks.create(heading);
+        if (!storedHeading)
+            return fail(blocks.lastError());
+        formattedBlockId = storedHeading->id;
+        if (!check(!BlockRepository::isPlainText(*storedHeading)
+                       && itemModel.selectTask(formattedId)
+                       && !itemModel.noteEditable()
+                       && !itemModel.noteError().isEmpty(),
+                   QStringLiteral("isPlainText guard did not protect formatted Task Note")))
+            return 1;
+        itemModel.setNoteText(QStringLiteral("Should be blocked"));
+        if (!check(itemModel.flushNote()
+                       && blocks.readById(formattedBlockId)->content == QStringLiteral("Protected Heading"),
+                   QStringLiteral("guarded Task Note overwrote formatted Block")))
+            return 1;
+
+        // Cascading soft-delete: create child + grandchild under legacyAncestorId,
+        // open grandchild in ItemModel, then delete ancestor.
+        legacyChildId = itemModel.addSubtask(legacyAncestorId, QStringLiteral("Step 1"));
+        legacyGrandchildId = itemModel.addSubtask(legacyChildId, QStringLiteral("Step 1a"));
+        if (!check(!legacyChildId.isEmpty() && !legacyGrandchildId.isEmpty()
+                       && itemModel.selectTask(legacyGrandchildId)
+                       && itemModel.deleteTask(legacyAncestorId)
+                       && !itemModel.hasSelection()
+                       && todayModel.taskCount() == 3,
+                   QStringLiteral("cascading soft-delete did not close pane or update TodayModel")))
+            return 1;
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        ItemRepository items(database);
+        FolderRepository folders(database);
+        TagRepository tags(database);
+        BlockRepository blocks(database);
+
+        if (!check(todayModel.dayNoteText() == dayNoteText
+                       && todayModel.taskCount() == 3
+                       && todayModel.eventCount() == 1
+                       && todayModel.lines().size() == 4,
+                   QStringLiteral("Today summary or Day note changed after Phase 5 restart")))
+            return 1;
+
+        const QVariantMap primaryLine = todayModel.lines().at(0).toMap();
+        const QVariantList primarySubtasks = primaryLine.value(QStringLiteral("subtasks")).toList();
+        const QVariantList grandChildren =
+            primarySubtasks.at(0).toMap().value(QStringLiteral("subtasks")).toList();
+        if (!check(primaryLine.value(QStringLiteral("id")).toString() == primaryId
+                       && primaryLine.value(QStringLiteral("title")).toString()
+                           == QStringLiteral("Ship Task lifecycle")
+                       && !primaryLine.value(QStringLiteral("completed")).toBool()
+                       && primaryLine.value(QStringLiteral("priority")).toInt() == 3
+                       && primaryLine.value(QStringLiteral("durationMin")).toInt() == 45
+                       && primaryLine.value(QStringLiteral("dueTime")).toString()
+                           == QStringLiteral("14:30")
+                       && primaryLine.value(QStringLiteral("folderId")).toString()
+                           == engineeringFolderId
+                       && primaryLine.value(QStringLiteral("folderName")).toString()
+                           == QStringLiteral("Engineering")
+                       && primaryLine.value(QStringLiteral("tags")).toList().size() == 2
+                       && primaryLine.value(QStringLiteral("subtaskDone")).toInt() == 1
+                       && primaryLine.value(QStringLiteral("subtaskTotal")).toInt() == 2
+                       && primarySubtasks.size() == 2
+                       && grandChildren.size() == 1
+                       && grandChildren.at(0).toMap().value(QStringLiteral("completed")).toBool(),
+                   QStringLiteral("surviving primary Task metadata or subtasks changed after restart")))
+            return 1;
+
+        if (!check(itemModel.selectTask(primaryId)
+                       && itemModel.title() == QStringLiteral("Ship Task lifecycle")
+                       && !itemModel.completed()
+                       && itemModel.priority() == 3
+                       && itemModel.hasDuration() && itemModel.durationMin() == 45
+                       && itemModel.hasDueDate() && itemModel.dueDate() == today
+                       && itemModel.hasDueTime() && itemModel.dueTime() == QStringLiteral("14:30")
+                       && itemModel.hasFolder() && itemModel.folderName() == QStringLiteral("Engineering")
+                       && itemModel.tags().size() == 2
+                       && itemModel.subtaskDone() == 1 && itemModel.subtaskTotal() == 2
+                       && itemModel.noteEditable() && itemModel.noteText() == taskNoteText,
+                   QStringLiteral("ItemModel did not restore full Phase 5 Task state after restart")))
+            return 1;
+
+        const auto undatedRow = items.readById(undatedId.toLongLong());
+        const auto secondaryRow = items.readById(secondaryId.toLongLong());
+        const auto formattedBlock = blocks.readById(formattedBlockId);
+        const auto eventRow = items.readById(eventId);
+        if (!check(undatedRow && !undatedRow->dueAt.has_value() && !undatedRow->duePrecision.has_value()
+                       && secondaryRow && !secondaryRow->folderId.has_value()
+                       && formattedBlock && formattedBlock->type == QStringLiteral("heading")
+                       && formattedBlock->content == QStringLiteral("Protected Heading")
+                       && eventRow && eventRow->title == QStringLiteral("Design sync")
+                       && folders.readAll().size() == 2
+                       && tags.readForItem(primaryId.toLongLong()).size() == 2,
+                   QStringLiteral("cleared fields, guarded Block, Event, Folders, or Tags changed after restart")))
+            return 1;
+
+        const auto deletedAncestor = items.readByIdIncludingSoftDeleted(legacyAncestorId.toLongLong());
+        const auto deletedChild = items.readByIdIncludingSoftDeleted(legacyChildId.toLongLong());
+        const auto deletedGrand = items.readByIdIncludingSoftDeleted(legacyGrandchildId.toLongLong());
+        if (!check(!items.readById(legacyAncestorId.toLongLong())
+                       && !items.readById(legacyChildId.toLongLong())
+                       && !items.readById(legacyGrandchildId.toLongLong())
+                       && !itemModel.selectTask(legacyAncestorId)
+                       && !itemModel.selectTask(legacyChildId)
+                       && !itemModel.selectTask(legacyGrandchildId)
+                       && deletedAncestor && deletedAncestor->deletedAt.has_value()
+                       && deletedChild && deletedChild->deletedAt.has_value()
+                       && deletedGrand && deletedGrand->deletedAt.has_value(),
+                   QStringLiteral("cascading soft-delete did not keep ancestor and descendants excluded after restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -5747,14 +6042,16 @@ int main(int argc, char* argv[])
     if (taskNotePlainTextGuardAndFailureSafety() != 0) {
         return 1;
     }
+    if (phase5TaskCrudMergeGateSurvivesRestart() != 0) {
+        return 1;
+    }
 
-    std::puts("verify-persistence: PASS - the Phase 2 merge gate holds: one "
-              "representative set of Items of every kind and Blocks of every "
-              "type, with every field, query shape, update, soft-delete, Block "
-              "order, cascade and constraint error, survives a restart "
-              "unchanged; the schema is created on first launch, left intact on "
-              "reopen, and the persisted schema version survives; two live "
-              "Database instances keep independent connections and survive "
-              "closure in either order");
+    std::puts("verify-persistence: PASS - the Phase 2-5 merge gates hold: "
+              "Items of every kind, Blocks of every type, Day notes, and the "
+              "full Phase 5 Task lifecycle (create, rename, schedule day and "
+              "24-hour time, clear due date, priority, duration, Folders, "
+              "Tags, nested subtasks with progress, Task Note scaffold with "
+              "isPlainText guard, TodayModel sync, and cascading soft-delete) "
+              "survive a restart unchanged against the local SQLite database");
     return 0;
 }
