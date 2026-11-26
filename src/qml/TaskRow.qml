@@ -12,6 +12,7 @@ Rectangle {
     required property bool completed
     property int priority: 0
     property int durationMin: 0
+    property string dueTime: ""
     property bool selected: false
     property bool editing: false
 
@@ -130,7 +131,21 @@ Rectangle {
             Flow {
                 Layout.fillWidth: true
                 spacing: 6
-                visible: !root.editing && (root.priority > 0 || root.durationMin > 0)
+                visible: !root.editing && (root.dueTime.length > 0 || root.priority > 0 || root.durationMin > 0)
+
+                Badge {
+                    visible: root.dueTime.length > 0
+                    interactive: false
+                    theme: root.theme
+                    text: root.dueTime
+                    accessibleName: qsTr("Due time: %1").arg(text)
+                    fillColor: Qt.rgba(root.theme.accent.r, root.theme.accent.g, root.theme.accent.b, 0.10)
+                    textColor: root.theme.accent
+                    borderColor: Qt.rgba(root.theme.accent.r, root.theme.accent.g, root.theme.accent.b, 0.22)
+                    padding: 2
+                    leftPadding: 8
+                    rightPadding: 8
+                }
 
                 Badge {
                     readonly property color tone: root.theme.priorityColor(root.priority)

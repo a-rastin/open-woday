@@ -442,6 +442,13 @@ void TodayModel::refreshLinesAndSummary()
         return;
     }
     for (const Item& item : taskItems) {
+        QString dueTime;
+        if (item.dueAt && item.duePrecision == QStringLiteral("time")
+            && item.dueAt->size() > 10) {
+            const QDateTime dt = QDateTime::fromString(*item.dueAt, Qt::ISODate);
+            if (dt.isValid())
+                dueTime = dt.toLocalTime().time().toString(QStringLiteral("HH:mm"));
+        }
         lines.append(QVariantMap{
             {QStringLiteral("id"), QString::number(item.id)},
             {QStringLiteral("kind"), kTaskKind},
@@ -449,6 +456,7 @@ void TodayModel::refreshLinesAndSummary()
             {QStringLiteral("completed"), item.completedAt.has_value()},
             {QStringLiteral("priority"), item.priority},
             {QStringLiteral("durationMin"), item.durationMin.value_or(0)},
+            {QStringLiteral("dueTime"), dueTime},
         });
     }
     const QList<Item> eventItems = items.readEventsStartingOn(selectedDate());

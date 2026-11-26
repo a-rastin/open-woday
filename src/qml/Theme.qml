@@ -66,4 +66,37 @@ QtObject {
             return qsTr("%1 h").arg(hours)
         return qsTr("%1 min").arg(mins)
     }
+
+    function isoDateOffset(days) {
+        const now = new Date()
+        const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + days)
+        return Qt.formatDate(date, "yyyy-MM-dd")
+    }
+
+    function formatDueDate(isoDay) {
+        if (!isoDay || isoDay.length !== 10)
+            return ""
+        if (isoDay === isoDateOffset(0))
+            return qsTr("Today")
+        if (isoDay === isoDateOffset(1))
+            return qsTr("Tomorrow")
+        if (isoDay === isoDateOffset(-1))
+            return qsTr("Yesterday")
+        const parts = isoDay.split("-")
+        if (parts.length !== 3)
+            return isoDay
+        const parsed = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))
+        if (isNaN(parsed.getTime()))
+            return isoDay
+        return Qt.locale("C").toString(parsed, "d MMM yyyy")
+    }
+
+    function formatDueDateTime(isoDay, dueTime) {
+        const dateLabel = formatDueDate(isoDay)
+        if (dateLabel.length === 0)
+            return ""
+        if (dueTime && dueTime.length > 0)
+            return qsTr("%1, %2").arg(dateLabel).arg(dueTime)
+        return dateLabel
+    }
 }

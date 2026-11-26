@@ -4264,6 +4264,387 @@ int plannedDurationSyncAndPersistAcrossRestart()
     return 0;
 }
 
+int dueDateSchedulingSyncAndPersistAcrossRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    const QString today = QDate::currentDate().toString(Qt::ISODate);
+    const QString tomorrow = QDate::currentDate().addDays(1).toString(Qt::ISODate);
+    QString firstId;
+    QString secondId;
+    QString thirdId;
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+        QObject::connect(&todayModel, &TodayModel::taskUpdated,
+                         &itemModel, &ItemModel::syncTask);
+
+        if (!todayModel.addTask(QStringLiteral("Submit expense claim"))
+            || !todayModel.addTask(QStringLiteral("Water studio plants"))
+            || !todayModel.addTask(QStringLiteral("Buy printer paper")))
+            return fail(QStringLiteral("could not seed Tasks for due date test"));
+
+        const QVariantList initialLines = todayModel.lines();
+        if (!check(initialLines.size() == 3 && todayModel.taskCount() == 3,
+                   QStringLiteral("seeded Tasks missing from Today")))
+            return 1;
+
+        firstId = initialLines.at(0).toMap().value(QStringLiteral("id")).toString();
+        secondId = initialLines.at(1).toMap().value(QStringLiteral("id")).toString();
+        thirdId = initialLines.at(2).toMap().value(QStringLiteral("id")).toString();
+
+        if (!check(itemModel.selectTask(firstId)
+                       && itemModel.hasDueDate()
+                       && itemModel.dueDate() == today
+                       && !itemModel.hasDueTime()
+                       && itemModel.dueTime().isEmpty()
+                       && itemModel.duePrecision() == QStringLiteral("day"),
+                   QStringLiteral("Today Task did not expose day-only due date")))
+            return 1;
+
+        // Invalid calendar day inputs must be rejected without modifying state.
+        const QStringList invalidDates{
+            QString(),
+            QStringLiteral("2026-02-30"),
+            QStringLiteral("2026-13-01"),
+            QStringLiteral("not-a-date"),
+            today + QStringLiteral("T10:00"),
+        };
+        for (const QString& badDate : invalidDates) {
+            if (!check(!itemModel.setTaskDueDate(firstId, badDate)
+                           && !itemModel.error().isEmpty()
+                           && itemModel.dueDate() == today
+                           && itemModel.duePrecision() == QStringLiteral("day"),
+                       QStringLiteral("invalid due date '%1' was not rejected").arg(badDate)))
+                return 1;
+        }
+
+        // Reschedule first Task from Today to Tomorrow; detail pane stays open
+        // while Today immediately removes the Task and updates summary counts.
+        if (!check(itemModel.setTaskDueDate(firstId, tomorrow)
+                       && itemModel.error().isEmpty()
+                       && itemModel.hasSelection()
+                       && itemModel.selectedId() == firstId
+                       && itemModel.hasDueDate()
+                       && itemModel.dueDate() == tomorrow
+                       && !itemModel.hasDueTime()
+                       && itemModel.duePrecision() == QStringLiteral("day")
+                       && todayModel.taskCount() == 2
+                       && todayModel.lines().size() == 2
+                       && todayModel.summary() == QStringLiteral("2 tasks and 0 events on this day"),
+                   QStringLiteral("rescheduling Task off Today did not update ItemModel and TodayModel")))
+            return 1;
+
+        todayModel.selectDate(tomorrow);
+        if (!check(todayModel.taskCount() == 1
+                       && todayModel.lines().size() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString() == firstId,
+                   QStringLiteral("rescheduled Task did not appear on target day")))
+            return 1;
+        todayModel.selectDate(today);
+
+        // Clear due date on second Task (making it undated) while keeping detail pane open.
+        if (!check(itemModel.selectTask(secondId)
+                       && itemModel.clearTaskDueDate(secondId)
+                       && itemModel.error().isEmpty()
+                       && itemModel.hasSelection()
+                       && itemModel.selectedId() == secondId
+                       && !itemModel.hasDueDate()
+                       && itemModel.dueDate().isEmpty()
+                       && !itemModel.hasDueTime()
+                       && itemModel.dueTime().isEmpty()
+                       && itemModel.duePrecision().isEmpty()
+                       && todayModel.taskCount() == 1
+                       && todayModel.lines().size() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString() == thirdId,
+                   QStringLiteral("clearing due date did not remove Task from Today or keep detail pane open")))
+            return 1;
+
+        ItemRepository items(database);
+        const auto clearedRow = items.readById(secondId.toLongLong());
+        if (!check(clearedRow && !clearedRow->dueAt.has_value()
+                       && !clearedRow->duePrecision.has_value(),
+                   QStringLiteral("clearing due date did not null out due_at and due_precision in SQLite")))
+            return 1;
+
+        // Schedule the undated Task back onto Today via ItemModel.
+        if (!check(itemModel.setTaskDueDate(secondId, today)
+                       && itemModel.hasDueDate()
+                       && itemModel.dueDate() == today
+                       && itemModel.duePrecision() == QStringLiteral("day")
+                       && todayModel.taskCount() == 2
+                       && todayModel.lines().size() == 2,
+                   QStringLiteral("scheduling undated Task onto Today did not update TodayModel")))
+            return 1;
+
+        // Clear third Task so we verify undated state survives restart too.
+        if (!check(itemModel.clearTaskDueDate(thirdId)
+                       && todayModel.taskCount() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString() == secondId,
+                   QStringLiteral("clearing third Task due date failed")))
+            return 1;
+
+        // Simulated SQLite write failure must preserve due date and report error.
+        QSqlQuery query(database.connection());
+        if (!query.exec(QStringLiteral(
+                "CREATE TRIGGER fail_due_date_update BEFORE UPDATE ON items "
+                "WHEN NEW.kind = 'task' BEGIN SELECT RAISE(FAIL, 'due date blocked'); END")))
+            return fail(query.lastError().text());
+
+        if (!check(!itemModel.setTaskDueDate(secondId, tomorrow)
+                       && itemModel.error().contains(QStringLiteral("due date blocked"))
+                       && itemModel.dueDate() == today
+                       && todayModel.taskCount() == 1,
+                   QStringLiteral("failed due date update did not preserve state or report error")))
+            return 1;
+
+        if (!query.exec(QStringLiteral("DROP TRIGGER fail_due_date_update")))
+            return fail(query.lastError().text());
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        ItemRepository items(database);
+
+        if (!check(todayModel.taskCount() == 1
+                       && todayModel.lines().size() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString() == secondId,
+                   QStringLiteral("Today due-date state did not survive restart")))
+            return 1;
+
+        todayModel.selectDate(tomorrow);
+        if (!check(todayModel.taskCount() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString() == firstId,
+                   QStringLiteral("Tomorrow due-date state did not survive restart")))
+            return 1;
+
+        if (!check(itemModel.selectTask(firstId)
+                       && itemModel.hasDueDate()
+                       && itemModel.dueDate() == tomorrow
+                       && itemModel.duePrecision() == QStringLiteral("day"),
+                   QStringLiteral("rescheduled Task did not reload due date in ItemModel after restart")))
+            return 1;
+
+        if (!check(itemModel.selectTask(thirdId)
+                       && !itemModel.hasDueDate()
+                       && itemModel.dueDate().isEmpty()
+                       && itemModel.duePrecision().isEmpty(),
+                   QStringLiteral("undated Task did not stay undated in ItemModel after restart")))
+            return 1;
+
+        const auto thirdRow = items.readById(thirdId.toLongLong());
+        if (!check(thirdRow && !thirdRow->dueAt.has_value()
+                       && !thirdRow->duePrecision.has_value(),
+                   QStringLiteral("undated Task did not remain null in SQLite after restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
+int dueTimeSchedulingSyncAndPersistAcrossRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    const QString today = QDate::currentDate().toString(Qt::ISODate);
+    const QString tomorrow = QDate::currentDate().addDays(1).toString(Qt::ISODate);
+    QString timedId;
+    QString dayOnlyId;
+    QString undatedId;
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+        QObject::connect(&todayModel, &TodayModel::taskUpdated,
+                         &itemModel, &ItemModel::syncTask);
+
+        if (!todayModel.addTask(QStringLiteral("Call clinic"))
+            || !todayModel.addTask(QStringLiteral("Mail signed contract"))
+            || !todayModel.addTask(QStringLiteral("Sort archive box")))
+            return fail(QStringLiteral("could not seed Tasks for due time test"));
+
+        const QVariantList initialLines = todayModel.lines();
+        if (!check(initialLines.size() == 3,
+                   QStringLiteral("seeded Tasks missing from Today")))
+            return 1;
+
+        timedId = initialLines.at(0).toMap().value(QStringLiteral("id")).toString();
+        dayOnlyId = initialLines.at(1).toMap().value(QStringLiteral("id")).toString();
+        undatedId = initialLines.at(2).toMap().value(QStringLiteral("id")).toString();
+
+        if (!check(itemModel.clearTaskDueDate(undatedId)
+                       && itemModel.selectTask(timedId)
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("dueTime")).toString().isEmpty(),
+                   QStringLiteral("day-only Task should not carry a dueTime")))
+            return 1;
+
+        // Adding a due time to an undated Task must be rejected.
+        if (!check(!itemModel.setTaskDueTime(undatedId, QStringLiteral("14:30"))
+                       && !itemModel.error().isEmpty(),
+                   QStringLiteral("setting due time on undated Task was not rejected")))
+            return 1;
+
+        // Invalid 24-hour time inputs must be rejected.
+        const QStringList invalidTimes{
+            QString(),
+            QStringLiteral("24:00"),
+            QStringLiteral("12:60"),
+            QStringLiteral("9:30"),
+            QStringLiteral("14:30:00"),
+            QStringLiteral("2:30pm"),
+            QStringLiteral("abcd"),
+        };
+        for (const QString& badTime : invalidTimes) {
+            if (!check(!itemModel.setTaskDueTime(timedId, badTime)
+                           && !itemModel.error().isEmpty()
+                           && !itemModel.hasDueTime()
+                           && itemModel.duePrecision() == QStringLiteral("day"),
+                       QStringLiteral("invalid due time '%1' was not rejected").arg(badTime)))
+                return 1;
+        }
+
+        // Add 24-hour time to scheduled Task.
+        if (!check(itemModel.setTaskDueTime(timedId, QStringLiteral("14:30"))
+                       && itemModel.error().isEmpty()
+                       && itemModel.hasDueDate()
+                       && itemModel.dueDate() == today
+                       && itemModel.hasDueTime()
+                       && itemModel.dueTime() == QStringLiteral("14:30")
+                       && itemModel.duePrecision() == QStringLiteral("time")
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("dueTime")).toString()
+                           == QStringLiteral("14:30")
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("dueTime")).toString().isEmpty(),
+                   QStringLiteral("setting 24-hour due time did not sync ItemModel and TodayModel")))
+            return 1;
+
+        ItemRepository items(database);
+        const auto timedRow = items.readById(timedId.toLongLong());
+        if (!check(timedRow && timedRow->duePrecision == std::optional<QString>(QStringLiteral("time"))
+                       && timedRow->dueAt
+                       && QDateTime::fromString(*timedRow->dueAt, Qt::ISODate).toLocalTime().date().toString(Qt::ISODate) == today
+                       && QDateTime::fromString(*timedRow->dueAt, Qt::ISODate).toLocalTime().time().toString(QStringLiteral("HH:mm"))
+                           == QStringLiteral("14:30"),
+                   QStringLiteral("timed due_at or due_precision did not persist accurately in SQLite")))
+            return 1;
+
+        // Edit 24-hour time.
+        if (!check(itemModel.setTaskDueTime(timedId, QStringLiteral("08:05"))
+                       && itemModel.dueTime() == QStringLiteral("08:05")
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("dueTime")).toString()
+                           == QStringLiteral("08:05"),
+                   QStringLiteral("editing 24-hour due time did not sync")))
+            return 1;
+
+        // Update both date and time together, moving the Task to Tomorrow while keeping pane open.
+        if (!check(itemModel.setTaskDueDateTime(timedId, tomorrow, QStringLiteral("19:45"))
+                       && itemModel.hasSelection()
+                       && itemModel.selectedId() == timedId
+                       && itemModel.dueDate() == tomorrow
+                       && itemModel.dueTime() == QStringLiteral("19:45")
+                       && itemModel.duePrecision() == QStringLiteral("time")
+                       && todayModel.taskCount() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString() == dayOnlyId,
+                   QStringLiteral("rescheduling timed Task to Tomorrow did not update Today")))
+            return 1;
+
+        todayModel.selectDate(tomorrow);
+        if (!check(todayModel.taskCount() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("dueTime")).toString()
+                           == QStringLiteral("19:45"),
+                   QStringLiteral("Tomorrow did not show rescheduled timed Task with 19:45 badge")))
+            return 1;
+
+        // Clear time back to day-only.
+        if (!check(itemModel.clearTaskDueTime(timedId)
+                       && itemModel.error().isEmpty()
+                       && itemModel.hasDueDate()
+                       && itemModel.dueDate() == tomorrow
+                       && !itemModel.hasDueTime()
+                       && itemModel.dueTime().isEmpty()
+                       && itemModel.duePrecision() == QStringLiteral("day")
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("dueTime")).toString().isEmpty(),
+                   QStringLiteral("clearing due time did not revert Task to day-only")))
+            return 1;
+
+        const auto dayRevertedRow = items.readById(timedId.toLongLong());
+        if (!check(dayRevertedRow && dayRevertedRow->dueAt == std::optional<QString>(tomorrow)
+                       && dayRevertedRow->duePrecision == std::optional<QString>(QStringLiteral("day")),
+                   QStringLiteral("clearing due time did not store day-only values in SQLite")))
+            return 1;
+
+        // Re-apply timed schedule for restart check on Today.
+        if (!check(itemModel.setTaskDueDateTime(timedId, today, QStringLiteral("09:15")),
+                   QStringLiteral("could not set timed schedule for restart verification")))
+            return 1;
+
+        // Simulated write failure preserves previous due time and reports error.
+        QSqlQuery query(database.connection());
+        if (!query.exec(QStringLiteral(
+                "CREATE TRIGGER fail_due_time_update BEFORE UPDATE ON items "
+                "WHEN NEW.kind = 'task' BEGIN SELECT RAISE(FAIL, 'due time blocked'); END")))
+            return fail(query.lastError().text());
+
+        if (!check(!itemModel.setTaskDueTime(timedId, QStringLiteral("22:00"))
+                       && itemModel.error().contains(QStringLiteral("due time blocked"))
+                       && itemModel.dueTime() == QStringLiteral("09:15")
+                       && itemModel.duePrecision() == QStringLiteral("time"),
+                   QStringLiteral("failed due time update did not preserve state or report error")))
+            return 1;
+
+        if (!query.exec(QStringLiteral("DROP TRIGGER fail_due_time_update")))
+            return fail(query.lastError().text());
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+
+        if (!check(todayModel.taskCount() == 2 && todayModel.lines().size() == 2
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString() == timedId
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("dueTime")).toString()
+                           == QStringLiteral("09:15")
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("id")).toString() == dayOnlyId
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("dueTime")).toString().isEmpty(),
+                   QStringLiteral("timed and day-only Tasks did not survive restart on TodayModel")))
+            return 1;
+
+        if (!check(itemModel.selectTask(timedId)
+                       && itemModel.hasDueDate()
+                       && itemModel.dueDate() == today
+                       && itemModel.hasDueTime()
+                       && itemModel.dueTime() == QStringLiteral("09:15")
+                       && itemModel.duePrecision() == QStringLiteral("time"),
+                   QStringLiteral("timed Task did not reload in ItemModel after restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -4458,6 +4839,12 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (plannedDurationSyncAndPersistAcrossRestart() != 0) {
+        return 1;
+    }
+    if (dueDateSchedulingSyncAndPersistAcrossRestart() != 0) {
+        return 1;
+    }
+    if (dueTimeSchedulingSyncAndPersistAcrossRestart() != 0) {
         return 1;
     }
 

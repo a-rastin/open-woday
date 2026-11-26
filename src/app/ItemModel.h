@@ -26,6 +26,11 @@ class ItemModel : public QObject
     Q_PROPERTY(int priority READ priority NOTIFY selectedTaskChanged)
     Q_PROPERTY(bool hasDuration READ hasDuration NOTIFY selectedTaskChanged)
     Q_PROPERTY(int durationMin READ durationMin NOTIFY selectedTaskChanged)
+    Q_PROPERTY(bool hasDueDate READ hasDueDate NOTIFY selectedTaskChanged)
+    Q_PROPERTY(QString dueDate READ dueDate NOTIFY selectedTaskChanged)
+    Q_PROPERTY(bool hasDueTime READ hasDueTime NOTIFY selectedTaskChanged)
+    Q_PROPERTY(QString dueTime READ dueTime NOTIFY selectedTaskChanged)
+    Q_PROPERTY(QString duePrecision READ duePrecision NOTIFY selectedTaskChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 
 public:
@@ -38,6 +43,11 @@ public:
     int priority() const;
     bool hasDuration() const;
     int durationMin() const;
+    bool hasDueDate() const;
+    QString dueDate() const;
+    bool hasDueTime() const;
+    QString dueTime() const;
+    QString duePrecision() const;
     QString error() const;
 
     Q_INVOKABLE bool selectTask(const QString& id);
@@ -47,6 +57,13 @@ public:
     Q_INVOKABLE bool setTaskPriority(const QString& id, int priority);
     Q_INVOKABLE bool setTaskDuration(const QString& id, int durationMin);
     Q_INVOKABLE bool clearTaskDuration(const QString& id);
+    Q_INVOKABLE bool setTaskDueDate(const QString& id, const QString& date);
+    Q_INVOKABLE bool setTaskDueTime(const QString& id, const QString& time);
+    Q_INVOKABLE bool setTaskDueDateTime(const QString& id,
+                                        const QString& date,
+                                        const QString& time);
+    Q_INVOKABLE bool clearTaskDueTime(const QString& id);
+    Q_INVOKABLE bool clearTaskDueDate(const QString& id);
     Q_INVOKABLE bool deleteTask(const QString& id);
 
 public slots:
@@ -72,6 +89,9 @@ private:
     bool m_completed = false;
     int m_priority = 0;
     std::optional<int> m_durationMin;
+    QString m_dueDate;
+    QString m_dueTime;
+    QString m_duePrecision;
     QString m_error;
 };
 
