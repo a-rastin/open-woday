@@ -1,14 +1,14 @@
 #include "ItemModel.h"
 
-#include "store/BlockRepository.h"
 #include "store/Database.h"
 #include "store/FolderRepository.h"
 #include "store/ItemRepository.h"
+#include "store/StoreHelpers.h"
 #include "store/TagRepository.h"
 
-#include <QCoreApplication>
 #include <QDate>
 #include <QDateTime>
+#include <QLocale>
 #include <QStringList>
 #include <QTime>
 #include <QVariantMap>
@@ -30,28 +30,6 @@ QString nowIsoUtc()
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 }
 
-std::optional<QDate> parseIsoCalendarDay(const QString& input)
-{
-    const QString trimmed = input.trimmed();
-    if (trimmed.size() != 10)
-        return std::nullopt;
-    const QDate date = QDate::fromString(trimmed, QStringLiteral("yyyy-MM-dd"));
-    if (!date.isValid() || date.toString(Qt::ISODate) != trimmed)
-        return std::nullopt;
-    return date;
-}
-
-std::optional<QTime> parseIso24HourTime(const QString& input)
-{
-    const QString trimmed = input.trimmed();
-    if (trimmed.size() != 5 || trimmed.at(2) != QLatin1Char(':'))
-        return std::nullopt;
-    const QTime time = QTime::fromString(trimmed, QStringLiteral("HH:mm"));
-    if (!time.isValid() || time.toString(QStringLiteral("HH:mm")) != trimmed)
-        return std::nullopt;
-    return time;
-}
-
 QString formatDueDateTime(const QDate& day, const QTime& time)
 {
     return day.toString(Qt::ISODate) + QLatin1Char('T')
@@ -65,23 +43,16 @@ DueFields extractDueFields(const Item& item)
         return fields;
 
     const QString precision = item.duePrecision.value_or(QString());
-    if (item.dueAt->size() == 10) {
-        if (const auto day = parseIsoCalendarDay(*item.dueAt)) {
-            fields.date = day->toString(Qt::ISODate);
-            fields.precision = precision.isEmpty() ? kDuePrecisionDay : precision;
-        }
-        return fields;
-    }
-
-    const QDateTime dt = QDateTime::fromString(*item.dueAt, Qt::ISODate);
-    if (!dt.isValid())
+    const auto parsed = store::parseIsoTimestamp(*item.dueAt);
+    if (!parsed)
         return fields;
 
-    const QDateTime local = dt.toLocalTime();
-    fields.date = local.date().toString(Qt::ISODate);
-    fields.precision = precision;
-    if (precision == kDuePrecisionTime)
-        fields.time = local.time().toString(QStringLiteral("HH:mm"));
+    fields.date = parsed->date.toString(Qt::ISODate);
+    fields.precision = (item.dueAt->size() == 10 && precision.isEmpty())
+        ? kDuePrecisionDay
+        : precision;
+    if (precision == kDuePrecisionTime && parsed->time)
+        fields.time = parsed->time->toString(QStringLiteral("HH:mm"));
     return fields;
 }
 
@@ -98,15 +69,15 @@ QVariantMap tagToMap(const Tag& tag)
 
 ItemModel::ItemModel(Database& database, QObject* parent)
     : QObject(parent),
-      m_database(database)
+      m_database(database),
+      m_noteBuffer(database, this)
 {
-    m_noteSaveTimer.setSingleShot(true);
-    m_noteSaveTimer.setInterval(400);
-    connect(&m_noteSaveTimer, &QTimer::timeout, this, &ItemModel::flushNote);
-    if (QCoreApplication::instance()) {
-        connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
-                this, &ItemModel::flushNote);
-    }
+    connect(&m_noteBuffer, &NoteBuffer::textChanged,
+            this, &ItemModel::noteTextChanged);
+    connect(&m_noteBuffer, &NoteBuffer::editableChanged,
+            this, &ItemModel::noteEditableChanged);
+    connect(&m_noteBuffer, &NoteBuffer::errorChanged,
+            this, &ItemModel::noteErrorChanged);
 
     if (m_database.connection().isOpen()) {
         refreshFolders();
@@ -116,7 +87,7 @@ ItemModel::ItemModel(Database& database, QObject* parent)
 
 ItemModel::~ItemModel()
 {
-    flushNote();
+    m_noteBuffer.flush();
 }
 
 bool ItemModel::hasSelection() const
@@ -177,6 +148,40 @@ QString ItemModel::dueTime() const
 QString ItemModel::duePrecision() const
 {
     return m_duePrecision;
+}
+
+QString ItemModel::dueDateTimeLabel() const
+{
+    const auto parsed = store::parseIsoCalendarDay(m_dueDate);
+    if (!parsed)
+        return QString();
+
+    const QDate today = QDate::currentDate();
+    QString dateLabel;
+    if (*parsed == today)
+        dateLabel = tr("Today");
+    else if (*parsed == today.addDays(1))
+        dateLabel = tr("Tomorrow");
+    else if (*parsed == today.addDays(-1))
+        dateLabel = tr("Yesterday");
+    else
+        dateLabel = QLocale::c().toString(*parsed, QStringLiteral("d MMM yyyy"));
+
+    if (hasDueTime())
+        return tr("%1, %2").arg(dateLabel, m_dueTime);
+    return dateLabel;
+}
+
+bool ItemModel::isDueToday() const
+{
+    const auto parsed = store::parseIsoCalendarDay(m_dueDate);
+    return parsed.has_value() && *parsed == QDate::currentDate();
+}
+
+bool ItemModel::isDueTomorrow() const
+{
+    const auto parsed = store::parseIsoCalendarDay(m_dueDate);
+    return parsed.has_value() && *parsed == QDate::currentDate().addDays(1);
 }
 
 bool ItemModel::hasFolder() const
@@ -241,17 +246,17 @@ int ItemModel::subtaskTotal() const
 
 QString ItemModel::noteText() const
 {
-    return m_noteText;
+    return m_noteBuffer.text();
 }
 
 bool ItemModel::noteEditable() const
 {
-    return m_noteEditable;
+    return m_noteBuffer.editable();
 }
 
 QString ItemModel::noteError() const
 {
-    return m_noteError;
+    return m_noteBuffer.error();
 }
 
 QString ItemModel::error() const
@@ -315,15 +320,22 @@ void ItemModel::applySelectedItem(const Item& item)
     QVariantList nextSubtasks;
     nextSubtasks.reserve(childItems.size());
     int nextSubtaskDone = 0;
-    const int nextSubtaskTotal = childItems.size();
+    int nextSubtaskTotal = 0;
     for (const Item& child : childItems) {
+        if (child.kind != kTaskKind)
+            continue;
+        ++nextSubtaskTotal;
         const bool childCompleted = child.completedAt.has_value();
         if (childCompleted)
             ++nextSubtaskDone;
 
         const QList<Item> grandChildren = itemRepo.readByParent(child.id);
         int grandDone = 0;
+        int grandTotal = 0;
         for (const Item& grand : grandChildren) {
+            if (grand.kind != kTaskKind)
+                continue;
+            ++grandTotal;
             if (grand.completedAt.has_value())
                 ++grandDone;
         }
@@ -334,7 +346,7 @@ void ItemModel::applySelectedItem(const Item& item)
             { QStringLiteral("completed"), childCompleted },
             { QStringLiteral("priority"), child.priority },
             { QStringLiteral("subtaskDone"), grandDone },
-            { QStringLiteral("subtaskTotal"), grandChildren.size() },
+            { QStringLiteral("subtaskTotal"), grandTotal },
         });
     }
 
@@ -441,74 +453,13 @@ void ItemModel::refreshAvailableTags()
     }
 }
 
-void ItemModel::setNoteEditable(bool editable)
-{
-    if (m_noteEditable != editable) {
-        m_noteEditable = editable;
-        emit noteEditableChanged();
-    }
-}
-
-void ItemModel::setNoteError(const QString& error)
-{
-    if (m_noteError != error) {
-        m_noteError = error;
-        emit noteErrorChanged();
-    }
-}
-
-void ItemModel::resetTaskNote()
-{
-    m_noteSaveTimer.stop();
-    m_noteDirty = false;
-    m_savedNoteText.clear();
-    if (!m_noteText.isEmpty()) {
-        m_noteText.clear();
-        emit noteTextChanged();
-    }
-    setNoteEditable(false);
-    setNoteError({});
-}
-
 bool ItemModel::loadTaskNote(qlonglong taskId)
 {
-    BlockRepository blocks(m_database);
-    const QList<Block> stored = blocks.readByItem(taskId);
-    if (!blocks.lastError().isEmpty()) {
-        m_noteSaveTimer.stop();
-        m_noteDirty = false;
-        m_savedNoteText.clear();
-        if (!m_noteText.isEmpty()) {
-            m_noteText.clear();
-            emit noteTextChanged();
-        }
-        setNoteEditable(false);
-        setNoteError(blocks.lastError());
+    if (!m_noteBuffer.load(taskId)) {
+        const QString err = m_noteBuffer.error();
+        m_noteBuffer.reset(err);
         return false;
     }
-
-    QStringList lines;
-    lines.reserve(stored.size());
-    bool editable = true;
-    for (const Block& block : stored) {
-        lines.append(block.content);
-        editable = editable && BlockRepository::isPlainText(block);
-    }
-
-    const QString nextText = lines.join(QLatin1Char('\n'));
-    m_noteSaveTimer.stop();
-    m_noteDirty = false;
-    m_savedNoteText = nextText;
-    if (m_noteText != nextText) {
-        m_noteText = nextText;
-        emit noteTextChanged();
-    }
-    setNoteEditable(editable);
-    setNoteError(editable
-                     ? QString()
-                     : QStringLiteral(
-                         "This Note contains formatted Blocks and is read-only "
-                         "in the plain-text editor."));
     return true;
 }
 
@@ -531,11 +482,12 @@ bool ItemModel::selectTask(const QString& id)
     if (!stored)
         return false;
 
-    if (m_selectedId > 0 && m_noteDirty && !flushNote()) {
+    if (m_selectedId > 0 && m_noteBuffer.isDirty() && !flushNote()) {
         if (stored->id != m_selectedId) {
-            setNoteError(QStringLiteral(
+            m_noteBuffer.setError(QStringLiteral(
                 "Cannot switch Task because the Task Note could not be saved. "
-                "Your changes are still here; try again. %1").arg(m_noteError));
+                "Your changes are still here; try again. %1")
+                                      .arg(m_noteBuffer.error()));
         }
         return false;
     }
@@ -548,10 +500,11 @@ bool ItemModel::selectTask(const QString& id)
 
 void ItemModel::clearSelection()
 {
-    if (m_selectedId > 0 && m_noteDirty && !flushNote()) {
-        setNoteError(QStringLiteral(
+    if (m_selectedId > 0 && m_noteBuffer.isDirty() && !flushNote()) {
+        m_noteBuffer.setError(QStringLiteral(
             "Cannot close Task details because the Task Note could not be saved. "
-            "Your changes are still here; try again. %1").arg(m_noteError));
+            "Your changes are still here; try again. %1")
+                                  .arg(m_noteBuffer.error()));
         return;
     }
     clearSelectionState();
@@ -583,7 +536,7 @@ void ItemModel::clearSelectionState()
     m_subtasks.clear();
     m_subtaskDone = 0;
     m_subtaskTotal = 0;
-    resetTaskNote();
+    m_noteBuffer.reset();
     setError({});
 
     if (hadSelection)
@@ -676,23 +629,19 @@ bool ItemModel::setTaskCompleted(const QString& id, bool completed)
         return true;
     }
 
-    Item updated = *stored;
-    const QString now = nowIsoUtc();
-    updated.completedAt = completed ? std::optional<QString>(now) : std::nullopt;
-    updated.modifiedAt = now;
-
     ItemRepository items(m_database);
-    if (!items.update(updated)) {
+    const std::optional<Item> updated = items.setCompleted(*stored, completed);
+    if (!updated) {
         setError(items.lastError());
         return false;
     }
 
     setError({});
-    if (updated.id == m_selectedId)
-        applySelectedItem(updated);
+    if (updated->id == m_selectedId)
+        applySelectedItem(*updated);
     else
         refreshSelectedTask();
-    emit taskMutated(updated.id);
+    emit taskMutated(updated->id);
     return true;
 }
 
@@ -764,6 +713,18 @@ bool ItemModel::setTaskDuration(const QString& id, int durationMin)
         });
 }
 
+bool ItemModel::setTaskDurationText(const QString& id, const QString& durationText)
+{
+    const QString trimmed = durationText.trimmed();
+    bool valid = false;
+    const int mins = trimmed.toInt(&valid);
+    if (!valid || mins <= 0) {
+        setError(QStringLiteral("Planned duration must be a positive number of minutes."));
+        return false;
+    }
+    return setTaskDuration(id, mins);
+}
+
 bool ItemModel::clearTaskDuration(const QString& id)
 {
     return updateTaskField(
@@ -775,9 +736,14 @@ bool ItemModel::clearTaskDuration(const QString& id)
         });
 }
 
+QString ItemModel::suggestedDueDate() const
+{
+    return hasDueDate() ? m_dueDate : QDate::currentDate().toString(Qt::ISODate);
+}
+
 bool ItemModel::setTaskDueDate(const QString& id, const QString& date)
 {
-    const auto parsed = parseIsoCalendarDay(date);
+    const auto parsed = store::parseIsoCalendarDay(date);
     if (!parsed) {
         setError(QStringLiteral("Due date must be a valid calendar date (YYYY-MM-DD)."));
         return false;
@@ -799,7 +765,7 @@ bool ItemModel::setTaskDueDate(const QString& id, const QString& date)
 
 bool ItemModel::setTaskDueTime(const QString& id, const QString& time)
 {
-    const auto parsedTime = parseIso24HourTime(time);
+    const auto parsedTime = store::parseIso24HourTime(time);
     if (!parsedTime) {
         setError(QStringLiteral("Due time must be a 24-hour time (HH:mm)."));
         return false;
@@ -826,13 +792,13 @@ bool ItemModel::setTaskDueDateTime(const QString& id,
     if (time.trimmed().isEmpty())
         return setTaskDueDate(id, date);
 
-    const auto parsedDate = parseIsoCalendarDay(date);
+    const auto parsedDate = store::parseIsoCalendarDay(date);
     if (!parsedDate) {
         setError(QStringLiteral("Due date must be a valid calendar date (YYYY-MM-DD)."));
         return false;
     }
 
-    const auto parsedTime = parseIso24HourTime(time);
+    const auto parsedTime = store::parseIso24HourTime(time);
     if (!parsedTime) {
         setError(QStringLiteral("Due time must be a 24-hour time (HH:mm)."));
         return false;
@@ -850,6 +816,15 @@ bool ItemModel::setTaskDueDateTime(const QString& id,
             updated.duePrecision = kDuePrecisionTime;
             updated.modifiedAt = now;
         });
+}
+
+bool ItemModel::setTaskDueRelativeDays(const QString& id,
+                                       int dayOffset,
+                                       const QString& time)
+{
+    const QString targetDate =
+        QDate::currentDate().addDays(dayOffset).toString(Qt::ISODate);
+    return setTaskDueDateTime(id, targetDate, time);
 }
 
 bool ItemModel::clearTaskDueTime(const QString& id)
@@ -1068,38 +1043,16 @@ bool ItemModel::detachTag(const QString& id, const QString& tagId)
 
 void ItemModel::setNoteText(const QString& text)
 {
-    if (!m_noteEditable || m_selectedId <= 0 || text == m_noteText)
+    if (m_selectedId <= 0)
         return;
-
-    m_noteText = text;
-    emit noteTextChanged();
-    if (text == m_savedNoteText) {
-        m_noteSaveTimer.stop();
-        m_noteDirty = false;
-        setNoteError({});
-        return;
-    }
-
-    m_noteDirty = true;
-    m_noteSaveTimer.start();
+    m_noteBuffer.setText(text);
 }
 
 bool ItemModel::flushNote()
 {
-    m_noteSaveTimer.stop();
-    if (!m_noteDirty || m_selectedId <= 0)
+    if (m_selectedId <= 0)
         return true;
-
-    BlockRepository blocks(m_database);
-    if (!blocks.replaceText(m_selectedId, m_noteText)) {
-        setNoteError(blocks.lastError());
-        return false;
-    }
-
-    m_noteDirty = false;
-    m_savedNoteText = m_noteText;
-    setNoteError({});
-    return true;
+    return m_noteBuffer.flush();
 }
 
 bool ItemModel::deleteTask(const QString& id)

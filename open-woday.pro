@@ -6,6 +6,7 @@ CONFIG += c++17
 
 SOURCES += src/main.cpp \
            src/app/ItemModel.cpp \
+           src/app/NoteBuffer.cpp \
            src/app/TodayModel.cpp \
            src/store/Database.cpp \
            src/store/FolderRepository.cpp \
@@ -14,6 +15,7 @@ SOURCES += src/main.cpp \
            src/store/TagRepository.cpp
 
 HEADERS += src/app/ItemModel.h \
+           src/app/NoteBuffer.h \
            src/app/TodayModel.h \
            src/store/Database.h \
            src/store/StoreHelpers.h \

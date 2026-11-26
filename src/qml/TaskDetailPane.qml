@@ -8,11 +8,16 @@ Item {
 
     required property Theme theme
 
-    signal addDetailRequested()
+    property string editingTitleTaskId: ""
+    property string editingTitleOriginal: ""
+    property bool resettingSelection: false
 
     function syncTitleFromModel() {
-        if (!titleInput.activeFocus)
+        if (!titleInput.activeFocus) {
             titleInput.text = itemModel.title
+            pane.editingTitleTaskId = itemModel.selectedId
+            pane.editingTitleOriginal = itemModel.title
+        }
     }
 
     function syncNoteFromModel() {
@@ -21,13 +26,23 @@ Item {
     }
 
     function commitTitle() {
+        const targetId = pane.editingTitleTaskId.length > 0
+            ? pane.editingTitleTaskId
+            : itemModel.selectedId
+        if (targetId.length === 0)
+            return
+        const originalTitle = pane.editingTitleTaskId.length > 0
+            ? pane.editingTitleOriginal
+            : itemModel.title
         const trimmed = titleInput.text.trim()
         if (trimmed.length === 0) {
-            titleInput.text = itemModel.title
+            if (targetId === itemModel.selectedId)
+                titleInput.text = itemModel.title
             return
         }
-        if (trimmed !== itemModel.title) {
-            if (!itemModel.renameTask(itemModel.selectedId, trimmed))
+        if (trimmed !== originalTitle) {
+            pane.editingTitleOriginal = trimmed
+            if (!itemModel.renameTask(targetId, trimmed) && targetId === itemModel.selectedId)
                 titleInput.text = itemModel.title
         }
     }
@@ -50,9 +65,7 @@ Item {
 
     function openDueDateEditor(anchorItem) {
         closePopups()
-        dueDateInput.text = itemModel.hasDueDate
-            ? itemModel.dueDate
-            : pane.theme.isoDateOffset(0)
+        dueDateInput.text = itemModel.suggestedDueDate()
         dueTimeInput.text = itemModel.hasDueTime ? itemModel.dueTime : ""
         positionPopupBelow(dueDatePopup, anchorItem)
         dueDatePopup.open()
@@ -83,13 +96,7 @@ Item {
     }
 
     function submitDurationInput() {
-        const trimmed = durationInput.text.trim()
-        const mins = Number(trimmed)
-        if (!Number.isInteger(mins) || mins <= 0) {
-            itemModel.setTaskDuration(itemModel.selectedId, 0)
-            return
-        }
-        if (itemModel.setTaskDuration(itemModel.selectedId, mins))
+        if (itemModel.setTaskDurationText(itemModel.selectedId, durationInput.text))
             durationPopup.close()
     }
 
@@ -142,14 +149,26 @@ Item {
         syncTitleFromModel()
         syncNoteFromModel()
     }
-    Component.onDestruction: itemModel.flushNote()
+    Component.onDestruction: {
+        pane.commitTitle()
+        itemModel.flushNote()
+    }
 
     Connections {
         target: itemModel
         function onSelectionChanged() {
             pane.closePopups()
+            if (itemModel.hasSelection && titleInput.activeFocus
+                    && pane.editingTitleTaskId.length > 0
+                    && pane.editingTitleTaskId !== itemModel.selectedId) {
+                pane.commitTitle()
+            }
+            pane.resettingSelection = true
             titleInput.focus = false
             titleInput.text = itemModel.title
+            pane.editingTitleTaskId = itemModel.selectedId
+            pane.editingTitleOriginal = itemModel.title
+            pane.resettingSelection = false
             noteEditor.focus = false
             noteEditor.text = itemModel.noteText
             newSubtaskInput.text = ""
@@ -205,7 +224,14 @@ Item {
                 iconKind: "delete"
                 destructive: true
                 toolTipText: qsTr("Delete task")
-                onClicked: itemModel.deleteTask(itemModel.selectedId)
+                onClicked: {
+                    pane.resettingSelection = true
+                    titleInput.focus = false
+                    pane.editingTitleTaskId = ""
+                    pane.editingTitleOriginal = ""
+                    pane.resettingSelection = false
+                    itemModel.deleteTask(itemModel.selectedId)
+                }
             }
 
             IconButton {
@@ -281,8 +307,12 @@ Item {
                                 titleInput.focus = false
                             }
                             onActiveFocusChanged: {
-                                if (!activeFocus)
+                                if (activeFocus) {
+                                    pane.editingTitleTaskId = itemModel.selectedId
+                                    pane.editingTitleOriginal = itemModel.title
+                                } else if (!pane.resettingSelection) {
                                     pane.commitTitle()
+                                }
                             }
                         }
                     }
@@ -299,7 +329,7 @@ Item {
                         id: dueDateBadge
                         visible: itemModel.hasDueDate
                         theme: pane.theme
-                        text: pane.theme.formatDueDateTime(itemModel.dueDate, itemModel.dueTime)
+                        text: itemModel.dueDateTimeLabel
                         accessibleName: qsTr("Due date: %1. Click to edit or clear").arg(text)
                         fillColor: itemModel.hasDueTime
                             ? Qt.rgba(pane.theme.accent.r, pane.theme.accent.g, pane.theme.accent.b, 0.10)
@@ -362,7 +392,6 @@ Item {
                         text: "+"
                         accessibleName: qsTr("Add task detail")
                         onClicked: {
-                            pane.addDetailRequested()
                             pane.closePopups()
                             pane.positionPopupBelow(addDetailPopup, addDetailBadge)
                             addDetailPopup.open()
@@ -619,7 +648,7 @@ Item {
                             anchors.top: parent.top
                             anchors.margins: 8
                             visible: noteEditor.text.length === 0 && itemModel.noteEditable
-                            text: qsTr("Write a note...")
+                            text: qsTr("Task notes...")
                             color: pane.theme.muted
                             font.family: pane.theme.font
                             font.pixelSize: pane.theme.bodySize - 1
@@ -807,7 +836,7 @@ Item {
                 leftPadding: 8
                 rightPadding: 8
                 Accessible.role: Accessible.MenuItem
-                Accessible.name: qsTr("Add tag")
+                Accessible.name: qsTr("Attach tag")
                 onClicked: pane.openTagEditor(addDetailBadge)
 
                 background: Rectangle {
@@ -816,7 +845,7 @@ Item {
                 }
 
                 contentItem: Text {
-                    text: qsTr("Add tag")
+                    text: qsTr("Tags")
                     color: pane.theme.panelText
                     font.family: pane.theme.font
                     font.pixelSize: pane.theme.bodySize - 1
@@ -877,14 +906,13 @@ Item {
 
                 Repeater {
                     model: [
-                        { label: qsTr("Today"), offset: 0 },
-                        { label: qsTr("Tomorrow"), offset: 1 }
+                        { label: qsTr("Today"), offset: 0, active: itemModel.isDueToday },
+                        { label: qsTr("Tomorrow"), offset: 1, active: itemModel.isDueTomorrow }
                     ]
 
                     delegate: Badge {
                         required property var modelData
-                        readonly property string targetDate: pane.theme.isoDateOffset(modelData.offset)
-                        readonly property bool isCurrent: itemModel.hasDueDate && itemModel.dueDate === targetDate
+                        readonly property bool isCurrent: modelData.active
                         theme: pane.theme
                         text: modelData.label
                         fillColor: isCurrent ? pane.theme.accent : pane.theme.chip
@@ -893,11 +921,12 @@ Item {
                         leftPadding: 8
                         rightPadding: 8
                         onClicked: {
-                            dueDateInput.text = targetDate
-                            itemModel.setTaskDueDateTime(
-                                itemModel.selectedId,
-                                targetDate,
-                                dueTimeInput.text.trim())
+                            if (itemModel.setTaskDueRelativeDays(
+                                    itemModel.selectedId,
+                                    modelData.offset,
+                                    dueTimeInput.text)) {
+                                dueDateInput.text = itemModel.dueDate
+                            }
                         }
                     }
                 }
@@ -1139,10 +1168,6 @@ Item {
                     font.family: pane.theme.font
                     font.pixelSize: pane.theme.bodySize - 1
                     inputMethodHints: Qt.ImhDigitsOnly
-                    validator: IntValidator {
-                        bottom: 1
-                        top: 10080
-                    }
                     Accessible.name: qsTr("Planned duration in minutes")
                     onAccepted: pane.submitDurationInput()
                 }
@@ -1297,10 +1322,10 @@ Item {
                 TextField {
                     id: newFolderInput
                     Layout.fillWidth: true
-                    placeholderText: qsTr("New folder")
+                    placeholderText: qsTr("Folder name")
                     font.family: pane.theme.font
                     font.pixelSize: pane.theme.bodySize - 1
-                    Accessible.name: qsTr("New folder name")
+                    Accessible.name: qsTr("Folder name")
                     onAccepted: pane.submitNewFolderInput()
                 }
 

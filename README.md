@@ -6,13 +6,14 @@ from one Qt Quick / QML + C++ codebase, with no account, no cloud and no
 webview.
 
 > **Status: design complete, implementation under way.** Every decision for
-> `v0.1` is settled in the [constitution](#project-documentation). Phases 1–3
-> are merged to `main`; the current `phase-4-today-page` branch adds an editable
-> Day note and basic Task creation and completion. The Today page is still
-> incomplete, and there is no packaged release yet. The
-> [build-from-source steps](#build-from-source)
-> are live; the install steps still describe the **planned** `v0.1` Linux
-> release. See [Roadmap and status](#roadmap-and-status) for what is next.
+> `v0.1` is settled in the [constitution](#project-documentation). Phases 1–4
+> are merged to `main`; the current `phase-5-task-crud` branch adds the full
+> Task lifecycle (inline rename, due date and 24-hour time, priority, Folders,
+> Tags, planned duration, nested subtasks, Task detail pane, and each Task's
+> plain-text Note pane) along with Today Task/Event badge chips. There is no
+> packaged release yet. The [build-from-source steps](#build-from-source) are
+> live; the install steps still describe the **planned** `v0.1` Linux release.
+> See [Roadmap and status](#roadmap-and-status) for what is next.
 
 ---
 
@@ -165,15 +166,16 @@ qmake6 open-woday.pro && make
 The window has native OS decorations, a dark Sidebar and TopBar, and white
 rounded centre and right-rail panels. The Sidebar folds before the RightRail as
 the window narrows. On the current branch, select a date in the day strip to
-edit its plain-text Day note, add a Task, or check and reopen an existing Task.
-Notes and Task completion persist locally. The summary counts Tasks and Events
-for the selected date, but Event lines and badge chips are not yet displayed.
-The Inbox and Quick Add are not functional, and the shortcut chip is a label
-only. For `v0.1`, the supported distribution will be the
-AppImage above. Packaging uses `linuxdeployqt` to bundle Qt libraries into the
-AppImage and `dpkg-deb` to build the `.deb`. See
-[`dev-docs/tech-stack.md`](dev-docs/tech-stack.md) for the proposed source tree
-and build details.
+edit its plain-text Day note, view Task and Event lines with badge chips, create,
+rename, complete, schedule, prioritize, tag, file, nest, and soft-delete Tasks,
+and inspect or edit a selected Task and its plain-text Note in the right-rail
+detail pane. All changes persist locally in SQLite. The 5-type block editor,
+to-do→Task linking, Inbox rail, Quick Add parser, CSV export, and release
+packaging remain planned; the shortcut chip in the top bar is a label only. For
+`v0.1`, the supported distribution will be the AppImage above. Packaging uses
+`linuxdeployqt` to bundle Qt libraries into the AppImage and `dpkg-deb` to build
+the `.deb`. See [`dev-docs/tech-stack.md`](dev-docs/tech-stack.md) for the
+proposed source tree and build details.
 
 ---
 
@@ -223,15 +225,14 @@ Full behavioural detail is in [`dev-docs/tech-stack.md`](dev-docs/tech-stack.md)
 
 Design is complete: 22 decisions were settled on 2026-11-23, and on 2026-11-24
 the former plan and ADRs were fully consolidated into the three constitution
-files (nothing was dropped). **Implementation is under way.** Phase 1 — the
-buildable Qt Quick skeleton — was merged to `main` in PR #1. Phase 2 — the
-SQLite data layer, repositories and persistence verification — was merged in
-PR #4. Phase 3 — the static three-panel app shell and shared visual tokens —
-was merged in PR #7. Phase 4 (Today page) is in progress on
-`phase-4-today-page`: Day notes and basic Task interactions are implemented,
-but the full Task/Event line presentation remains incomplete. No release has been
-tagged; releases start with `v0.1` on GitHub. The full phase list, deferred
-backlog and definition of done are in
+files (nothing was dropped). **Implementation is under way.** Phase 1 — the buildable Qt Quick skeleton — was merged to `main` in PR #1.
+Phase 2 — the SQLite data layer, repositories and persistence verification — was
+merged in PR #4. Phase 3 — the static three-panel app shell and shared visual
+tokens — was merged in PR #7. Phase 4 — the Today page and editable Day note —
+was merged in PR #10. Phase 5 (full Task CRUD, Task detail pane, subtasks,
+Folders/Tags, and Today Task/Event metadata chips) is in progress on
+`phase-5-task-crud`. No release has been tagged; releases start with `v0.1` on
+GitHub. The full phase list, deferred backlog and definition of done are in
 [`dev-docs/roadmap.md`](dev-docs/roadmap.md).
 
 ---

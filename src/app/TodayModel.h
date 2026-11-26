@@ -1,6 +1,8 @@
 #ifndef OPENWODAY_APP_TODAYMODEL_H
 #define OPENWODAY_APP_TODAYMODEL_H
 
+#include "NoteBuffer.h"
+
 #include <QAbstractListModel>
 #include <QByteArray>
 #include <QDate>
@@ -105,7 +107,6 @@ private:
     void scheduleMidnight();
     void refreshLinesAndSummary();
     bool loadDayNote(const QString& date);
-    void setDayNoteError(const QString& error);
     void setTaskError(const QString& error);
     void setRefreshError(const QString& error);
 
@@ -115,15 +116,9 @@ private:
     QDate m_selected;
     int m_taskCount = 0;
     int m_eventCount = 0;
-    qlonglong m_dayNoteId = 0;
-    QString m_dayNoteText;
-    QString m_savedNoteText;
-    QString m_dayNoteError;
+    NoteBuffer m_dayNote;
     QString m_taskError;
     QString m_refreshError;
-    bool m_dayNoteDirty = false;
-    bool m_dayNoteEditable = false;
-    QTimer m_noteSaveTimer;
     QTimer m_midnightTimer;
     std::function<QDateTime()> m_clock;
     QVariantList m_lines;

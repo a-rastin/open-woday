@@ -1,9 +1,10 @@
 #ifndef OPENWODAY_APP_ITEMMODEL_H
 #define OPENWODAY_APP_ITEMMODEL_H
 
+#include "NoteBuffer.h"
+
 #include <QObject>
 #include <QString>
-#include <QTimer>
 #include <QVariantList>
 #include <QtGlobal>
 
@@ -33,6 +34,9 @@ class ItemModel : public QObject
     Q_PROPERTY(bool hasDueTime READ hasDueTime NOTIFY selectedTaskChanged)
     Q_PROPERTY(QString dueTime READ dueTime NOTIFY selectedTaskChanged)
     Q_PROPERTY(QString duePrecision READ duePrecision NOTIFY selectedTaskChanged)
+    Q_PROPERTY(QString dueDateTimeLabel READ dueDateTimeLabel NOTIFY selectedTaskChanged)
+    Q_PROPERTY(bool isDueToday READ isDueToday NOTIFY selectedTaskChanged)
+    Q_PROPERTY(bool isDueTomorrow READ isDueTomorrow NOTIFY selectedTaskChanged)
     Q_PROPERTY(bool hasFolder READ hasFolder NOTIFY selectedTaskChanged)
     Q_PROPERTY(QString folderId READ folderId NOTIFY selectedTaskChanged)
     Q_PROPERTY(QString folderName READ folderName NOTIFY selectedTaskChanged)
@@ -66,6 +70,9 @@ public:
     bool hasDueTime() const;
     QString dueTime() const;
     QString duePrecision() const;
+    QString dueDateTimeLabel() const;
+    bool isDueToday() const;
+    bool isDueTomorrow() const;
     bool hasFolder() const;
     QString folderId() const;
     QString folderName() const;
@@ -90,12 +97,17 @@ public:
     Q_INVOKABLE bool setTaskCompleted(const QString& id, bool completed);
     Q_INVOKABLE bool setTaskPriority(const QString& id, int priority);
     Q_INVOKABLE bool setTaskDuration(const QString& id, int durationMin);
+    Q_INVOKABLE bool setTaskDurationText(const QString& id, const QString& durationText);
     Q_INVOKABLE bool clearTaskDuration(const QString& id);
+    Q_INVOKABLE QString suggestedDueDate() const;
     Q_INVOKABLE bool setTaskDueDate(const QString& id, const QString& date);
     Q_INVOKABLE bool setTaskDueTime(const QString& id, const QString& time);
     Q_INVOKABLE bool setTaskDueDateTime(const QString& id,
                                         const QString& date,
                                         const QString& time);
+    Q_INVOKABLE bool setTaskDueRelativeDays(const QString& id,
+                                            int dayOffset,
+                                            const QString& time = QString());
     Q_INVOKABLE bool clearTaskDueTime(const QString& id);
     Q_INVOKABLE bool clearTaskDueDate(const QString& id);
     Q_INVOKABLE QString createFolder(const QString& name);
@@ -134,9 +146,6 @@ private:
     void refreshFolders();
     void refreshAvailableTags();
     bool loadTaskNote(qlonglong taskId);
-    void resetTaskNote();
-    void setNoteEditable(bool editable);
-    void setNoteError(const QString& error);
     void clearSelectionState();
     void setError(const QString& error);
 
@@ -159,12 +168,7 @@ private:
     QVariantList m_subtasks;
     int m_subtaskDone = 0;
     int m_subtaskTotal = 0;
-    QString m_noteText;
-    QString m_savedNoteText;
-    QString m_noteError;
-    bool m_noteDirty = false;
-    bool m_noteEditable = false;
-    QTimer m_noteSaveTimer;
+    NoteBuffer m_noteBuffer;
     QString m_error;
 };
 

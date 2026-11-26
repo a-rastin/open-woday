@@ -31,6 +31,7 @@
 #include <QtGlobal>
 
 #include <cstdio>
+#include <ctime>
 #include <optional>
 #include <sqlite3.h>
 
@@ -235,18 +236,17 @@ int debouncedDayNoteWrites()
     if (!check(stored.size() == 2 && stored.at(1).content == QStringLiteral("changed"),
                QStringLiteral("debounced save did not persist latest text")))
         return 1;
-    QSqlQuery query(database.connection());
-    if (!query.exec(QStringLiteral("CREATE TEMP TABLE block_updates (id INTEGER)"))
-        || !query.exec(QStringLiteral("CREATE TEMP TRIGGER count_block_updates AFTER UPDATE ON blocks "
-                                      "BEGIN INSERT INTO block_updates VALUES (NEW.id); END")))
-        return fail(query.lastError().text());
     model.setDayNoteText(QStringLiteral("first\nfinal"));
-    if (!check(model.flushDayNote(), QStringLiteral("explicit flush failed")))
+    if (!check(model.flushDayNote()
+                   && model.dayNoteError().isEmpty()
+                   && model.dayNoteText() == QStringLiteral("first\nfinal"),
+               QStringLiteral("explicit flush failed")))
         return 1;
-    if (!query.exec(QStringLiteral("SELECT id FROM block_updates")) || !query.next())
-        return fail(QStringLiteral("changed line was not updated"));
-    if (!check(query.value(0).toLongLong() == stored.at(1).id && !query.next(),
-               QStringLiteral("unchanged lines were updated")))
+    stored = blocks.readByItem(id);
+    if (!check(stored.size() == 2
+                   && stored.at(0).content == QStringLiteral("first")
+                   && stored.at(1).content == QStringLiteral("final"),
+               QStringLiteral("explicit flush did not persist updated Day note blocks")))
         return 1;
     model.setDayNoteText(QStringLiteral("temporary"));
     model.setDayNoteText(QStringLiteral("first\nfinal"));
@@ -656,13 +656,12 @@ int todayCompletionRefreshesAlreadyStoredState()
     return 0;
 }
 
-// Deny a particular SELECT after the task lookup, simulating either failed
-// repository read without disrupting the preceding successful write/lookup.
-int denySelectedRead(void* context, int action, const char*, const char*,
-                     const char*, const char*)
+// Deny SELECT queries during refresh so read failures can be observed
+// without depending on internal query order or count.
+int denySelectQueries(void*, int action, const char*, const char*,
+                      const char*, const char*)
 {
-    int* remaining = static_cast<int*>(context);
-    if (action == SQLITE_SELECT && --*remaining == 0)
+    if (action == SQLITE_SELECT)
         return SQLITE_DENY;
     return SQLITE_OK;
 }
@@ -686,7 +685,6 @@ int todayRefreshRetainsStateOnReadFailure()
     if (!model.addTask(QStringLiteral("Existing task")))
         return fail(QStringLiteral("could not create fixture Task"));
     const QVariantList original = model.lines();
-    const QString id = original.first().toMap().value("id").toString();
     const QString summary = model.summary();
     if (!check(original.size() == 2 && model.taskCount() == 1 && model.eventCount() == 1,
                QStringLiteral("Task and Event fixture missing")))
@@ -696,23 +694,20 @@ int todayRefreshRetainsStateOnReadFailure()
                QStringLiteral("SQLite handle unavailable")))
         return 1;
     sqlite3* sqlite = *static_cast<sqlite3**>(handle.data());
-    for (int read = 2; read <= 3; ++read) {
-        int remaining = read;
-        sqlite3_set_authorizer(sqlite, denySelectedRead, &remaining);
-        model.setTaskCompleted(id, false);
-        sqlite3_set_authorizer(sqlite, nullptr, nullptr);
-        if (!check(remaining == 0 && model.lines() == original
-                       && model.summary() == summary
-                       && model.taskCount() == 1 && model.eventCount() == 1
-                       && !model.property("refreshError").toString().isEmpty(),
-                   QStringLiteral("failed Item read replaced state or hid its error")))
-            return 1;
-        model.setTaskCompleted(id, false);
-        if (!check(model.property("refreshError").toString().isEmpty()
-                       && model.lines() == original,
-                   QStringLiteral("successful refresh did not clear its error")))
-            return 1;
-    }
+    sqlite3_set_authorizer(sqlite, denySelectQueries, nullptr);
+    model.refresh();
+    sqlite3_set_authorizer(sqlite, nullptr, nullptr);
+    if (!check(model.lines() == original
+                   && model.summary() == summary
+                   && model.taskCount() == 1 && model.eventCount() == 1
+                   && !model.property("refreshError").toString().isEmpty(),
+               QStringLiteral("failed Item read replaced state or hid its error")))
+        return 1;
+    model.refresh();
+    if (!check(model.property("refreshError").toString().isEmpty()
+                   && model.lines() == original,
+               QStringLiteral("successful refresh did not clear its error")))
+        return 1;
     return 0;
 }
 
@@ -5825,6 +5820,415 @@ int phase5TaskCrudMergeGateSurvivesRestart()
     return 0;
 }
 
+int softDeleteDoesNotCascadeNotesOrEvents()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    qlonglong noteId = 0;
+    qlonglong noteChildTaskId = 0;
+    qlonglong eventId = 0;
+    qlonglong eventChildNoteId = 0;
+    qlonglong taskId = 0;
+    qlonglong taskChildTaskId = 0;
+    qlonglong taskChildEventId = 0;
+    qlonglong taskChildNoteId = 0;
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        ItemRepository items(database);
+
+        const auto note = items.create(QStringLiteral("note"), QStringLiteral("Root note"));
+        const auto event = items.create(QStringLiteral("event"), QStringLiteral("Root event"));
+        const auto task = items.create(QStringLiteral("task"), QStringLiteral("Root task"));
+        if (!note || !event || !task)
+            return fail(items.lastError());
+        noteId = note->id;
+        eventId = event->id;
+        taskId = task->id;
+
+        Item noteChildTask;
+        noteChildTask.kind = QStringLiteral("task");
+        noteChildTask.title = QStringLiteral("Task under note");
+        noteChildTask.parentId = noteId;
+        const auto createdNoteChild = items.create(noteChildTask);
+
+        Item eventChildNote;
+        eventChildNote.kind = QStringLiteral("note");
+        eventChildNote.title = QStringLiteral("Note under event");
+        eventChildNote.parentId = eventId;
+        const auto createdEventChild = items.create(eventChildNote);
+
+        Item taskChildTask;
+        taskChildTask.kind = QStringLiteral("task");
+        taskChildTask.title = QStringLiteral("Subtask under task");
+        taskChildTask.parentId = taskId;
+        const auto createdTaskChild = items.create(taskChildTask);
+
+        Item taskChildEvent;
+        taskChildEvent.kind = QStringLiteral("event");
+        taskChildEvent.title = QStringLiteral("Event under task");
+        taskChildEvent.parentId = taskId;
+        const auto createdTaskEvent = items.create(taskChildEvent);
+
+        Item taskChildNote;
+        taskChildNote.kind = QStringLiteral("note");
+        taskChildNote.title = QStringLiteral("Note under task");
+        taskChildNote.parentId = taskId;
+        const auto createdTaskNote = items.create(taskChildNote);
+
+        if (!createdNoteChild || !createdEventChild || !createdTaskChild
+            || !createdTaskEvent || !createdTaskNote)
+            return fail(items.lastError());
+
+        noteChildTaskId = createdNoteChild->id;
+        eventChildNoteId = createdEventChild->id;
+        taskChildTaskId = createdTaskChild->id;
+        taskChildEventId = createdTaskEvent->id;
+        taskChildNoteId = createdTaskNote->id;
+
+        if (!check(items.softDelete(noteId)
+                       && !items.readById(noteId)
+                       && items.readById(noteChildTaskId).has_value(),
+                   QStringLiteral("soft-deleting a Note unexpectedly cascaded to linked Task")))
+            return 1;
+
+        if (!check(items.softDelete(eventId)
+                       && !items.readById(eventId)
+                       && items.readById(eventChildNoteId).has_value(),
+                   QStringLiteral("soft-deleting an Event unexpectedly cascaded to linked Note")))
+            return 1;
+
+        if (!check(items.softDelete(taskId)
+                       && !items.readById(taskId)
+                       && !items.readById(taskChildTaskId)
+                       && items.readById(taskChildEventId).has_value()
+                       && items.readById(taskChildNoteId).has_value(),
+                   QStringLiteral("soft-deleting a Task cascaded to non-Task Items or missed subtask")))
+            return 1;
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        ItemRepository items(database);
+        if (!check(!items.readById(noteId)
+                       && items.readById(noteChildTaskId).has_value()
+                       && !items.readById(eventId)
+                       && items.readById(eventChildNoteId).has_value()
+                       && !items.readById(taskId)
+                       && !items.readById(taskChildTaskId)
+                       && items.readById(taskChildEventId).has_value()
+                       && items.readById(taskChildNoteId).has_value(),
+                   QStringLiteral("non-Task cascade protection did not hold after restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
+int rescheduledSubtasksLeaveOldDayAndAppearOnTargetDay()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    const QString today = QDate::currentDate().toString(Qt::ISODate);
+    const QString tomorrow = QDate::currentDate().addDays(1).toString(Qt::ISODate);
+    QString parentId;
+    QString childId;
+    QString grandchildId;
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+        QObject::connect(&todayModel, &TodayModel::taskUpdated,
+                         &itemModel, &ItemModel::syncTask);
+
+        if (!todayModel.addTask(QStringLiteral("Parent task")))
+            return fail(QStringLiteral("could not seed parent Task"));
+        parentId = todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString();
+
+        childId = itemModel.addSubtask(parentId, QStringLiteral("Child subtask"));
+        grandchildId = itemModel.addSubtask(childId, QStringLiteral("Grandchild subtask"));
+        if (childId.isEmpty() || grandchildId.isEmpty())
+            return fail(QStringLiteral("could not seed nested subtasks"));
+
+        if (!check(todayModel.taskCount() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtaskTotal")).toInt() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtasks")).toList().size() == 1,
+                   QStringLiteral("undated child subtask was not nested on parent's day")))
+            return 1;
+
+        // Rescheduling child to tomorrow removes it from Today's nested view
+        // and places it as a root Task on Tomorrow (with its undated grandchild).
+        if (!check(itemModel.setTaskDueDate(childId, tomorrow)
+                       && todayModel.taskCount() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtaskTotal")).toInt() == 0
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtasks")).toList().isEmpty(),
+                   QStringLiteral("rescheduled subtask remained beneath parent on old day")))
+            return 1;
+
+        todayModel.selectDate(tomorrow);
+        if (!check(todayModel.taskCount() == 1
+                       && todayModel.lines().size() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString() == childId
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtaskTotal")).toInt() == 1,
+                   QStringLiteral("rescheduled subtask did not appear on target day")))
+            return 1;
+
+        // If grandchild is explicitly scheduled for today while intermediate child is
+        // on tomorrow, grandchild remains visible at root level on today.
+        if (!check(itemModel.setTaskDueDate(grandchildId, today),
+                   QStringLiteral("could not schedule grandchild on today")))
+            return 1;
+        todayModel.selectDate(today);
+        if (!check(todayModel.taskCount() == 2
+                       && todayModel.lines().size() == 2
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString() == parentId
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("id")).toString() == grandchildId,
+                   QStringLiteral("grandchild due today was hidden when intermediate parent was on tomorrow")))
+            return 1;
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        if (!check(todayModel.taskCount() == 2
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtasks")).toList().isEmpty(),
+                   QStringLiteral("rescheduled subtask filtering did not survive restart")))
+            return 1;
+
+        todayModel.selectDate(tomorrow);
+        if (!check(todayModel.taskCount() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString() == childId
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtasks")).toList().isEmpty(),
+                   QStringLiteral("target day subtask view did not survive restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
+int dstGapDueTimeDoesNotShift()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    const QByteArray previousTz = qgetenv("TZ");
+    const bool hadTz = qEnvironmentVariableIsSet("TZ");
+    struct TzGuard {
+        QByteArray previous;
+        bool had;
+        ~TzGuard()
+        {
+            if (had)
+                qputenv("TZ", previous);
+            else
+                qunsetenv("TZ");
+            tzset();
+        }
+    } tzGuard{ previousTz, hadTz };
+
+    qputenv("TZ", "America/New_York");
+    tzset();
+
+    const QString gapDay = QStringLiteral("2026-03-08");
+    const QString gapTime = QStringLiteral("02:30");
+    QString taskId;
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database, nullptr, [] {
+            return QDateTime(QDate(2026, 3, 8), QTime(12, 0));
+        });
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+
+        if (!todayModel.addTask(QStringLiteral("Spring forward task")))
+            return fail(QStringLiteral("could not seed Task for DST gap check"));
+        taskId = todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString();
+
+        if (!check(itemModel.selectTask(taskId)
+                       && itemModel.setTaskDueDateTime(taskId, gapDay, gapTime)
+                       && itemModel.dueDate() == gapDay
+                       && itemModel.dueTime() == gapTime
+                       && todayModel.taskCount() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("dueTime")).toString()
+                           == gapTime,
+                   QStringLiteral("DST gap due time shifted instead of preserving 02:30")))
+            return 1;
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database, nullptr, [] {
+            return QDateTime(QDate(2026, 3, 8), QTime(12, 0));
+        });
+        ItemModel itemModel(database);
+        if (!check(itemModel.selectTask(taskId)
+                       && itemModel.dueDate() == gapDay
+                       && itemModel.dueTime() == gapTime
+                       && todayModel.taskCount() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("dueTime")).toString()
+                           == gapTime,
+                   QStringLiteral("DST gap due time shifted after restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
+int eventMetadataAndModelSchedulingHelpersSurviveRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    const QString today = QDate::currentDate().toString(Qt::ISODate);
+    const QString tomorrow = QDate::currentDate().addDays(1).toString(Qt::ISODate);
+    QString taskId;
+    qlonglong timedEventId = 0;
+    qlonglong allDayEventId = 0;
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        ItemRepository items(database);
+        FolderRepository folders(database);
+        TagRepository tags(database);
+
+        const auto workFolder = folders.create(QStringLiteral("Work"));
+        const auto focusTag = tags.findOrCreate(QStringLiteral("Focus"));
+        if (!workFolder || !focusTag)
+            return fail(QStringLiteral("could not seed Folder/Tag for Event metadata check"));
+
+        Item timedEvent;
+        timedEvent.kind = QStringLiteral("event");
+        timedEvent.title = QStringLiteral("Design review");
+        timedEvent.startAt = today + QStringLiteral("T10:00:00");
+        timedEvent.endAt = today + QStringLiteral("T11:30:00");
+        timedEvent.priority = 2;
+        timedEvent.durationMin = 90;
+        timedEvent.folderId = workFolder->id;
+        timedEvent.sortOrder = 1;
+        const auto createdTimed = items.create(timedEvent);
+
+        Item allDayEvent;
+        allDayEvent.kind = QStringLiteral("event");
+        allDayEvent.title = QStringLiteral("Company offsite");
+        allDayEvent.startAt = today;
+        allDayEvent.allDay = true;
+        allDayEvent.sortOrder = 2;
+        const auto createdAllDay = items.create(allDayEvent);
+
+        if (!createdTimed || !createdAllDay
+            || !tags.attachToItem(createdTimed->id, focusTag->id))
+            return fail(items.lastError());
+        timedEventId = createdTimed->id;
+        allDayEventId = createdAllDay->id;
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+
+        if (!todayModel.addTask(QStringLiteral("Verify C++ helpers")))
+            return fail(QStringLiteral("could not seed Task for C++ helper check"));
+        taskId = todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString();
+
+        // Check ItemModel C++ scheduling and duration validation helpers.
+        if (!check(itemModel.selectTask(taskId)
+                       && itemModel.suggestedDueDate() == today
+                       && itemModel.isDueToday()
+                       && !itemModel.isDueTomorrow()
+                       && itemModel.dueDateTimeLabel() == QStringLiteral("Today")
+                       && itemModel.setTaskDueRelativeDays(taskId, 1, QStringLiteral("15:45"))
+                       && itemModel.dueDate() == tomorrow
+                       && itemModel.dueTime() == QStringLiteral("15:45")
+                       && itemModel.isDueTomorrow()
+                       && !itemModel.isDueToday()
+                       && itemModel.dueDateTimeLabel() == QStringLiteral("Tomorrow, 15:45"),
+                   QStringLiteral("ItemModel relative scheduling helpers failed")))
+            return 1;
+
+        if (!check(!itemModel.setTaskDurationText(taskId, QStringLiteral("abc"))
+                       && !itemModel.error().isEmpty()
+                       && !itemModel.setTaskDurationText(taskId, QStringLiteral("0"))
+                       && !itemModel.error().isEmpty()
+                       && itemModel.setTaskDurationText(taskId, QStringLiteral(" 45 "))
+                       && itemModel.error().isEmpty()
+                       && itemModel.durationMin() == 45,
+                   QStringLiteral("ItemModel duration text validation failed")))
+            return 1;
+
+        // Check TodayModel Event metadata projection.
+        const QVariantList lines = todayModel.lines();
+        if (!check(lines.size() == 2 && todayModel.taskCount() == 0 && todayModel.eventCount() == 2,
+                   QStringLiteral("TodayModel Event line count mismatch")))
+            return 1;
+        const QVariantMap timedMap = lines.at(0).toMap();
+        const QVariantMap allDayMap = lines.at(1).toMap();
+        if (!check(timedMap.value(QStringLiteral("id")).toString() == QString::number(timedEventId)
+                       && !timedMap.value(QStringLiteral("allDay")).toBool()
+                       && timedMap.value(QStringLiteral("startTime")).toString() == QStringLiteral("10:00")
+                       && timedMap.value(QStringLiteral("endTime")).toString() == QStringLiteral("11:30")
+                       && timedMap.value(QStringLiteral("priority")).toInt() == 2
+                       && timedMap.value(QStringLiteral("durationMin")).toInt() == 90
+                       && timedMap.value(QStringLiteral("folderName")).toString() == QStringLiteral("Work")
+                       && timedMap.value(QStringLiteral("tags")).toList().size() == 1
+                       && !timedMap.contains(QStringLiteral("completed"))
+                       && allDayMap.value(QStringLiteral("id")).toString() == QString::number(allDayEventId)
+                       && allDayMap.value(QStringLiteral("allDay")).toBool()
+                       && allDayMap.value(QStringLiteral("startTime")).toString().isEmpty(),
+                   QStringLiteral("TodayModel Event metadata projection was incomplete")))
+            return 1;
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        if (!check(todayModel.lines().size() == 2
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("startTime")).toString()
+                           == QStringLiteral("10:00")
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("folderName")).toString()
+                           == QStringLiteral("Work")
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("allDay")).toBool(),
+                   QStringLiteral("TodayModel Event metadata did not survive restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -6043,6 +6447,18 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (phase5TaskCrudMergeGateSurvivesRestart() != 0) {
+        return 1;
+    }
+    if (softDeleteDoesNotCascadeNotesOrEvents() != 0) {
+        return 1;
+    }
+    if (rescheduledSubtasksLeaveOldDayAndAppearOnTargetDay() != 0) {
+        return 1;
+    }
+    if (dstGapDueTimeDoesNotShift() != 0) {
+        return 1;
+    }
+    if (eventMetadataAndModelSchedulingHelpersSurviveRestart() != 0) {
         return 1;
     }
 

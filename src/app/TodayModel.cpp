@@ -1,9 +1,9 @@
 #include "TodayModel.h"
 
 #include "store/Database.h"
-#include "store/BlockRepository.h"
 #include "store/FolderRepository.h"
 #include "store/ItemRepository.h"
+#include "store/StoreHelpers.h"
 #include "store/TagRepository.h"
 
 #include <QLocale>
@@ -31,6 +31,11 @@ QString isoDate(const QDate& date)
     return date.toString(Qt::ISODate);
 }
 
+bool isScheduledForOtherDay(const Item& item, const QSet<qlonglong>& dueIds)
+{
+    return item.dueAt && !item.dueAt->isEmpty() && !dueIds.contains(item.id);
+}
+
 bool hasDueAncestor(const Item& item,
                     const QHash<qlonglong, Item>& taskById,
                     const QSet<qlonglong>& dueIds)
@@ -45,30 +50,22 @@ bool hasDueAncestor(const Item& item,
         const auto parentIt = taskById.constFind(*cursor);
         if (parentIt == taskById.constEnd())
             break;
+        // If an ancestor was explicitly scheduled on another day, it is not
+        // rendered on the selected day, so its subtree is cut here and
+        // descendants due today remain visible at root level.
+        if (isScheduledForOtherDay(*parentIt, dueIds))
+            break;
         cursor = parentIt->parentId;
     }
     return false;
 }
 
-bool buildTaskLineMap(const Item& item,
-                      const QHash<qlonglong, QList<Item>>& childrenByParent,
-                      const QHash<qlonglong, QString>& folderNames,
-                      TagRepository& tagRepo,
-                      QSet<qlonglong>& visited,
-                      QVariantMap* outMap,
-                      QString* outError)
+bool readItemTagList(TagRepository& tagRepo,
+                     qlonglong itemId,
+                     QVariantList* outTags,
+                     QString* outError)
 {
-    visited.insert(item.id);
-
-    QString dueTime;
-    if (item.dueAt && item.duePrecision == QStringLiteral("time")
-        && item.dueAt->size() > 10) {
-        const QDateTime dt = QDateTime::fromString(*item.dueAt, Qt::ISODate);
-        if (dt.isValid())
-            dueTime = dt.toLocalTime().time().toString(QStringLiteral("HH:mm"));
-    }
-
-    const QList<Tag> itemTags = tagRepo.readForItem(item.id);
+    const QList<Tag> itemTags = tagRepo.readForItem(itemId);
     if (!tagRepo.lastError().isEmpty()) {
         *outError = tagRepo.lastError();
         return false;
@@ -82,6 +79,27 @@ bool buildTaskLineMap(const Item& item,
             {QStringLiteral("colour"), tag.colour.value_or(QString())},
         });
     }
+    *outTags = tagList;
+    return true;
+}
+
+bool buildTaskLineMap(const Item& item,
+                      const QHash<qlonglong, QList<Item>>& childrenByParent,
+                      const QHash<qlonglong, QString>& folderNames,
+                      TagRepository& tagRepo,
+                      QSet<qlonglong>& visited,
+                      QVariantMap* outMap,
+                      QString* outError)
+{
+    visited.insert(item.id);
+
+    const QString dueTime = (item.duePrecision == QStringLiteral("time"))
+        ? store::extractLocalTimeHHmm(item.dueAt)
+        : QString();
+
+    QVariantList tagList;
+    if (!readItemTagList(tagRepo, item.id, &tagList, outError))
+        return false;
 
     const QString folderId = (item.folderId && *item.folderId > 0)
         ? QString::number(*item.folderId)
@@ -141,14 +159,16 @@ TodayModel::TodayModel(Database& database, QObject* parent,
       m_database(database),
       m_today(clock().date()),
       m_selected(m_today),
+      m_dayNote(database, this),
       m_clock(std::move(clock))
 {
-    m_noteSaveTimer.setSingleShot(true);
-    m_noteSaveTimer.setInterval(400);
-    connect(&m_noteSaveTimer, &QTimer::timeout, this, &TodayModel::flushDayNote);
-    if (QCoreApplication::instance())
-        connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
-                this, &TodayModel::flushDayNote);
+    connect(&m_dayNote, &NoteBuffer::textChanged,
+            this, &TodayModel::dayNoteTextChanged);
+    connect(&m_dayNote, &NoteBuffer::editableChanged,
+            this, &TodayModel::dayNoteEditableChanged);
+    connect(&m_dayNote, &NoteBuffer::errorChanged,
+            this, &TodayModel::dayNoteErrorChanged);
+
     m_days.reserve(kDayStripSize);
     for (int i = 0; i < kDayStripSize; ++i) {
         m_days.append(m_today.addDays(i - kDaysBeforeToday));
@@ -191,10 +211,10 @@ void TodayModel::updateToday()
             if (flushDayNote() && loadDayNote(isoDate(target))) {
                 m_selected = target;
                 selectionChanged = true;
-            } else if (m_dayNoteDirty) {
-                setDayNoteError(QStringLiteral(
+            } else if (m_dayNote.isDirty()) {
+                m_dayNote.setError(QStringLiteral(
                     "Cannot change date because the Day note could not be saved. "
-                    "Your changes are still here; try again. %1").arg(m_dayNoteError));
+                    "Your changes are still here; try again. %1").arg(m_dayNote.error()));
             }
         }
 
@@ -306,17 +326,17 @@ int TodayModel::eventCount() const
 
 QString TodayModel::dayNoteText() const
 {
-    return m_dayNoteText;
+    return m_dayNote.text();
 }
 
 bool TodayModel::dayNoteEditable() const
 {
-    return m_dayNoteEditable;
+    return m_dayNote.editable();
 }
 
 QString TodayModel::dayNoteError() const
 {
-    return m_dayNoteError;
+    return m_dayNote.error();
 }
 
 QString TodayModel::taskError() const
@@ -361,8 +381,8 @@ bool TodayModel::setTaskCompleted(const QString& id, bool completed)
         return false;
     ItemRepository items(m_database);
     const auto stored = items.readById(itemId);
-    if (!stored || stored->kind != kTaskKind || !stored->dueAt
-        || stored->dueAt->left(10) != selectedDate()) {
+    if (!stored || stored->kind != kTaskKind
+        || !store::fallsOnLocalDay(stored->dueAt, m_selected)) {
         if (!items.lastError().isEmpty())
             setTaskError(items.lastError());
         return false;
@@ -373,11 +393,7 @@ bool TodayModel::setTaskCompleted(const QString& id, bool completed)
         emit taskUpdated(itemId);
         return true;
     }
-    Item updated = *stored;
-    const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-    updated.completedAt = completed ? std::optional<QString>(now) : std::nullopt;
-    updated.modifiedAt = now;
-    if (!items.update(updated)) {
+    if (!items.setCompleted(*stored, completed)) {
         setTaskError(items.lastError());
         return false;
     }
@@ -385,14 +401,6 @@ bool TodayModel::setTaskCompleted(const QString& id, bool completed)
     refreshLinesAndSummary();
     emit taskUpdated(itemId);
     return true;
-}
-
-void TodayModel::setDayNoteError(const QString& error)
-{
-    if (m_dayNoteError != error) {
-        m_dayNoteError = error;
-        emit dayNoteErrorChanged();
-    }
 }
 
 void TodayModel::setTaskError(const QString& error)
@@ -416,7 +424,7 @@ bool TodayModel::loadDayNote(const QString& date)
     ItemRepository items(m_database);
     const QList<Item> dated = items.readByDay(date);
     if (!items.lastError().isEmpty()) {
-        setDayNoteError(items.lastError());
+        m_dayNote.setError(items.lastError());
         return false;
     }
     qlonglong id = 0;
@@ -432,68 +440,22 @@ bool TodayModel::loadDayNote(const QString& date)
         note.day = date;
         const auto created = items.create(note);
         if (!created) {
-            setDayNoteError(items.lastError());
+            m_dayNote.setError(items.lastError());
             return false;
         }
         id = created->id;
     }
-    BlockRepository blocks(m_database);
-    const QList<Block> stored = blocks.readByItem(id);
-    if (!blocks.lastError().isEmpty()) {
-        setDayNoteError(blocks.lastError());
-        return false;
-    }
-    QStringList lines;
-    bool editable = true;
-    for (const Block& block : stored) {
-        lines.append(block.content);
-        editable = editable && BlockRepository::isPlainText(block);
-    }
-    m_dayNoteId = id;
-    m_dayNoteText = lines.join(QLatin1Char('\n'));
-    m_savedNoteText = m_dayNoteText;
-    m_dayNoteDirty = false;
-    if (m_dayNoteEditable != editable) {
-        m_dayNoteEditable = editable;
-        emit dayNoteEditableChanged();
-    }
-    setDayNoteError(editable ? QString() : QStringLiteral(
-        "This note contains formatted blocks and is read-only in the plain-text editor."));
-    emit dayNoteTextChanged();
-    return true;
+    return m_dayNote.load(id);
 }
 
 void TodayModel::setDayNoteText(const QString& text)
 {
-    if (!m_dayNoteEditable || !m_dayNoteId || text == m_dayNoteText) {
-        return;
-    }
-    m_dayNoteText = text;
-    emit dayNoteTextChanged();
-    if (text == m_savedNoteText) {
-        m_noteSaveTimer.stop();
-        m_dayNoteDirty = false;
-        setDayNoteError({});
-        return;
-    }
-    m_dayNoteDirty = true;
-    m_noteSaveTimer.start();
+    m_dayNote.setText(text);
 }
 
 bool TodayModel::flushDayNote()
 {
-    m_noteSaveTimer.stop();
-    if (!m_dayNoteDirty)
-        return true;
-    BlockRepository blocks(m_database);
-    if (!blocks.replaceText(m_dayNoteId, m_dayNoteText)) {
-        setDayNoteError(blocks.lastError());
-        return false;
-    }
-    m_dayNoteDirty = false;
-    m_savedNoteText = m_dayNoteText;
-    setDayNoteError({});
-    return true;
+    return m_dayNote.flush();
 }
 
 void TodayModel::selectDate(const QString& date)
@@ -509,9 +471,9 @@ void TodayModel::selectDate(const QString& date)
     }
 
     if (!flushDayNote()) {
-        setDayNoteError(QStringLiteral(
+        m_dayNote.setError(QStringLiteral(
             "Cannot change date because the Day note could not be saved. "
-            "Your changes are still here; try again. %1").arg(m_dayNoteError));
+            "Your changes are still here; try again. %1").arg(m_dayNote.error()));
         return;
     }
     if (!loadDayNote(normalized)) {
@@ -552,22 +514,28 @@ void TodayModel::refreshLinesAndSummary()
         return;
     }
 
+    QSet<qlonglong> dueIds;
+    dueIds.reserve(taskItems.size());
+    for (const Item& item : taskItems)
+        dueIds.insert(item.id);
+
     QHash<qlonglong, Item> taskById;
     QHash<qlonglong, QList<Item>> childrenByParent;
     taskById.reserve(allTasks.size());
     bool needsFolders = false;
     for (const Item& task : allTasks) {
         taskById.insert(task.id, task);
-        if (task.parentId && *task.parentId > 0)
+        if (task.parentId && *task.parentId > 0
+            && !isScheduledForOtherDay(task, dueIds)) {
             childrenByParent[*task.parentId].append(task);
+        }
         if (task.folderId && *task.folderId > 0)
             needsFolders = true;
     }
-
-    QSet<qlonglong> dueIds;
-    dueIds.reserve(taskItems.size());
-    for (const Item& item : taskItems)
-        dueIds.insert(item.id);
+    for (const Item& eventItem : eventItems) {
+        if (eventItem.folderId && *eventItem.folderId > 0)
+            needsFolders = true;
+    }
 
     QList<Item> rootTasks;
     rootTasks.reserve(taskItems.size());
@@ -604,10 +572,32 @@ void TodayModel::refreshLinesAndSummary()
         lines.append(lineMap);
     }
     for (const Item& item : eventItems) {
+        QVariantList tagList;
+        QString tagError;
+        if (!readItemTagList(tagRepo, item.id, &tagList, &tagError)) {
+            setRefreshError(tagError);
+            return;
+        }
+        const QString folderId = (item.folderId && *item.folderId > 0)
+            ? QString::number(*item.folderId)
+            : QString();
+        const QString folderName = (item.folderId && *item.folderId > 0)
+            ? folderNames.value(*item.folderId)
+            : QString();
         lines.append(QVariantMap{
             {QStringLiteral("id"), QString::number(item.id)},
             {QStringLiteral("kind"), kEventKind},
             {QStringLiteral("title"), item.title},
+            {QStringLiteral("allDay"), item.allDay},
+            {QStringLiteral("startTime"),
+             item.allDay ? QString() : store::extractLocalTimeHHmm(item.startAt)},
+            {QStringLiteral("endTime"),
+             item.allDay ? QString() : store::extractLocalTimeHHmm(item.endAt)},
+            {QStringLiteral("priority"), item.priority},
+            {QStringLiteral("durationMin"), item.durationMin.value_or(0)},
+            {QStringLiteral("folderId"), folderId},
+            {QStringLiteral("folderName"), folderName},
+            {QStringLiteral("tags"), tagList},
         });
     }
 

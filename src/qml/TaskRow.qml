@@ -7,23 +7,25 @@ ColumnLayout {
     id: root
 
     required property Theme theme
-    required property string taskId
-    required property string title
-    required property bool completed
-    property int priority: 0
-    property int durationMin: 0
-    property string dueTime: ""
-    property string folderName: ""
-    property var tags: []
-    property int subtaskDone: 0
-    property int subtaskTotal: 0
-    property var subtasks: []
+    required property var taskData
     property int depth: 0
     property string selectedTaskId: ""
     property var expandedIds: ({})
     property bool selected: false
     property bool editing: false
     property bool addingSubtask: false
+
+    readonly property string taskId: taskData && taskData.id !== undefined ? taskData.id : ""
+    readonly property string title: taskData && taskData.title !== undefined ? taskData.title : ""
+    readonly property bool completed: Boolean(taskData && taskData.completed)
+    readonly property int priority: taskData && taskData.priority !== undefined ? taskData.priority : 0
+    readonly property int durationMin: taskData && taskData.durationMin !== undefined ? taskData.durationMin : 0
+    readonly property string dueTime: taskData && taskData.dueTime !== undefined ? taskData.dueTime : ""
+    readonly property string folderName: taskData && taskData.folderName !== undefined ? taskData.folderName : ""
+    readonly property var tags: taskData && taskData.tags !== undefined ? taskData.tags : []
+    readonly property int subtaskDone: taskData && taskData.subtaskDone !== undefined ? taskData.subtaskDone : 0
+    readonly property int subtaskTotal: taskData && taskData.subtaskTotal !== undefined ? taskData.subtaskTotal : 0
+    readonly property var subtasks: taskData && taskData.subtasks !== undefined ? taskData.subtasks : []
 
     readonly property bool isSelected: selected
         || (selectedTaskId.length > 0 && selectedTaskId === taskId)
@@ -168,105 +170,25 @@ ColumnLayout {
                     }
                 }
 
-                Flow {
+                ItemBadges {
                     Layout.fillWidth: true
-                    spacing: 6
-                    visible: !root.editing && (root.dueTime.length > 0 || root.priority > 0
-                        || root.durationMin > 0 || root.folderName.length > 0
-                        || root.subtaskTotal > 0
-                        || (root.tags && root.tags.length > 0))
-
-                    Badge {
-                        visible: root.dueTime.length > 0
-                        interactive: false
-                        theme: root.theme
-                        text: root.dueTime
-                        accessibleName: qsTr("Due time: %1").arg(text)
-                        fillColor: Qt.rgba(root.theme.accent.r, root.theme.accent.g, root.theme.accent.b, 0.10)
-                        textColor: root.theme.accent
-                        borderColor: Qt.rgba(root.theme.accent.r, root.theme.accent.g, root.theme.accent.b, 0.22)
-                        padding: 2
-                        leftPadding: 8
-                        rightPadding: 8
-                    }
-
-                    Badge {
-                        readonly property color tone: root.theme.priorityColor(root.priority)
-                        visible: root.priority > 0
-                        interactive: false
-                        theme: root.theme
-                        text: root.theme.priorityLabel(root.priority)
-                        accessibleName: qsTr("Priority: %1").arg(text)
-                        fillColor: Qt.rgba(tone.r, tone.g, tone.b, 0.12)
-                        textColor: tone
-                        borderColor: Qt.rgba(tone.r, tone.g, tone.b, 0.25)
-                        padding: 2
-                        leftPadding: 8
-                        rightPadding: 8
-                    }
-
-                    Badge {
-                        visible: root.durationMin > 0
-                        interactive: false
-                        theme: root.theme
-                        text: root.theme.formatDuration(root.durationMin)
-                        accessibleName: qsTr("Planned duration: %1").arg(text)
-                        fillColor: root.theme.chip
-                        textColor: root.theme.muted
-                        padding: 2
-                        leftPadding: 8
-                        rightPadding: 8
-                    }
-
-                    Badge {
-                        visible: root.folderName.length > 0
-                        interactive: false
-                        theme: root.theme
-                        text: root.folderName
-                        accessibleName: qsTr("Folder: %1").arg(text)
-                        fillColor: root.theme.chip
-                        textColor: root.theme.panelText
-                        borderColor: root.theme.border
-                        padding: 2
-                        leftPadding: 8
-                        rightPadding: 8
-                    }
-
-                    Badge {
-                        visible: root.subtaskTotal > 0
-                        interactive: true
-                        theme: root.theme
-                        text: (root.expanded ? "▾ " : "▸ ")
-                            + qsTr("%1/%2").arg(root.subtaskDone).arg(root.subtaskTotal)
-                        accessibleName: qsTr("%1 of %2 subtasks completed. Click to %3")
-                            .arg(root.subtaskDone)
-                            .arg(root.subtaskTotal)
-                            .arg(root.expanded ? qsTr("collapse") : qsTr("expand"))
-                        fillColor: root.expanded
-                            ? Qt.rgba(root.theme.accent.r, root.theme.accent.g, root.theme.accent.b, 0.10)
-                            : root.theme.chip
-                        textColor: root.expanded ? root.theme.accent : root.theme.panelText
-                        borderColor: root.expanded
-                            ? Qt.rgba(root.theme.accent.r, root.theme.accent.g, root.theme.accent.b, 0.22)
-                            : root.theme.border
-                        padding: 2
-                        leftPadding: 8
-                        rightPadding: 8
-                        onClicked: root.toggleExpandRequested(root.taskId)
-                    }
-
-                    Repeater {
-                        model: root.tags
-
-                        delegate: TagChip {
-                            required property var modelData
-                            theme: root.theme
-                            tagName: modelData.name
-                            tagColour: modelData.colour !== undefined ? modelData.colour : ""
-                            removable: false
-                            verticalPadding: 2
-                        }
-                    }
+                    visible: !root.editing
+                        && (root.dueTime.length > 0 || root.priority > 0
+                            || root.durationMin > 0 || root.folderName.length > 0
+                            || root.subtaskTotal > 0
+                            || (root.tags && root.tags.length > 0))
+                    theme: root.theme
+                    leadingText: root.dueTime
+                    leadingAccessibleName: root.dueTime.length > 0 ? qsTr("Due time: %1").arg(root.dueTime) : ""
+                    priority: root.priority
+                    durationMin: root.durationMin
+                    folderName: root.folderName
+                    tags: root.tags
+                    showSubtasks: true
+                    subtaskDone: root.subtaskDone
+                    subtaskTotal: root.subtaskTotal
+                    subtaskExpanded: root.expanded
+                    onSubtaskToggleRequested: root.toggleExpandRequested(root.taskId)
                 }
             }
 
@@ -327,17 +249,7 @@ ColumnLayout {
                             function loadChild() {
                                 setSource("TaskRow.qml", {
                                     theme: root.theme,
-                                    taskId: modelData.id,
-                                    title: modelData.title,
-                                    completed: modelData.completed,
-                                    priority: modelData.priority !== undefined ? modelData.priority : 0,
-                                    durationMin: modelData.durationMin !== undefined ? modelData.durationMin : 0,
-                                    dueTime: modelData.dueTime !== undefined ? modelData.dueTime : "",
-                                    folderName: modelData.folderName !== undefined ? modelData.folderName : "",
-                                    tags: modelData.tags !== undefined ? modelData.tags : [],
-                                    subtaskDone: modelData.subtaskDone !== undefined ? modelData.subtaskDone : 0,
-                                    subtaskTotal: modelData.subtaskTotal !== undefined ? modelData.subtaskTotal : 0,
-                                    subtasks: modelData.subtasks !== undefined ? modelData.subtasks : [],
+                                    taskData: modelData,
                                     depth: root.depth + 1,
                                     selectedTaskId: root.selectedTaskId,
                                     expandedIds: root.expandedIds
@@ -392,10 +304,10 @@ ColumnLayout {
             TextField {
                 id: newSubtaskField
                 Layout.fillWidth: true
-                placeholderText: qsTr("New subtask")
+                placeholderText: qsTr("Subtask title")
                 font.family: root.theme.font
                 font.pixelSize: root.theme.bodySize - 1
-                Accessible.name: qsTr("New subtask")
+                Accessible.name: qsTr("Subtask title")
                 onAccepted: root.submitAddSubtask()
                 Keys.onEscapePressed: (event) => {
                     event.accepted = true

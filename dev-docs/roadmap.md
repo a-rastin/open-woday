@@ -61,7 +61,7 @@ Derived from the dependency-ordered build order of the former `PLAN.md` §13.
 ### Phase 2 — data-layer
 
 - **Branch:** `phase-2-data-layer`
-- **Status:** in-progress
+- **Status:** done
 - **Goal:** the local persistence foundation.
 - **Deliverables:** `Database` (schema creation, versioned migrations), the full
   schema (`items`, `blocks`, `folders`, `tags`, `item_tags`, `links`, `meta`),
@@ -75,7 +75,7 @@ Derived from the dependency-ordered build order of the former `PLAN.md` §13.
 ### Phase 3 — app-shell
 
 - **Branch:** `phase-3-app-shell`
-- **Status:** planned
+- **Status:** done
 - **Goal:** the reference three-panel window and visual tokens.
 - **Deliverables:** `Sidebar`, `TopBar`, `RightRail` QML; panel tokens
   (`canvas`, `sidebar`, `panel`, chips, radii, font — `tech-stack.md` §8.3);
@@ -89,7 +89,7 @@ Derived from the dependency-ordered build order of the former `PLAN.md` §13.
 ### Phase 4 — today-page
 
 - **Branch:** `phase-4-today-page`
-- **Status:** planned
+- **Status:** done
 - **Goal:** the Today page as an editable Day note.
 - **Deliverables:** `DayStrip`, summary line, Task/Event lines with badge chips,
   check-off, day-note wiring (one `items` row with `day`, unique per date), free
@@ -102,7 +102,7 @@ Derived from the dependency-ordered build order of the former `PLAN.md` §13.
 ### Phase 5 — task-crud
 
 - **Branch:** `phase-5-task-crud`
-- **Status:** planned
+- **Status:** in-progress
 - **Goal:** the full Task lifecycle.
 - **Deliverables:** create / rename / edit / complete / reopen; due date (day +
   optional time), priority, Tags, Folder, nested subtasks (`parent_id`), inline

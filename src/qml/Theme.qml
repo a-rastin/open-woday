@@ -35,24 +35,25 @@ QtObject {
     readonly property int titleSize: 28
     readonly property size dayStripCell: Qt.size(44, 56)
 
+    function prioritySpec(level) {
+        switch (level) {
+        case 3:
+            return { color: priorityHigh, label: qsTr("High") }
+        case 2:
+            return { color: priorityMedium, label: qsTr("Medium") }
+        case 1:
+            return { color: priorityLow, label: qsTr("Low") }
+        default:
+            return { color: muted, label: qsTr("None") }
+        }
+    }
+
     function priorityColor(level) {
-        if (level === 3)
-            return priorityHigh
-        if (level === 2)
-            return priorityMedium
-        if (level === 1)
-            return priorityLow
-        return muted
+        return prioritySpec(level).color
     }
 
     function priorityLabel(level) {
-        if (level === 3)
-            return qsTr("High")
-        if (level === 2)
-            return qsTr("Medium")
-        if (level === 1)
-            return qsTr("Low")
-        return qsTr("None")
+        return prioritySpec(level).label
     }
 
     function formatDuration(minutes) {
@@ -65,39 +66,6 @@ QtObject {
         if (hours > 0)
             return qsTr("%1 h").arg(hours)
         return qsTr("%1 min").arg(mins)
-    }
-
-    function isoDateOffset(days) {
-        const now = new Date()
-        const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + days)
-        return Qt.formatDate(date, "yyyy-MM-dd")
-    }
-
-    function formatDueDate(isoDay) {
-        if (!isoDay || isoDay.length !== 10)
-            return ""
-        if (isoDay === isoDateOffset(0))
-            return qsTr("Today")
-        if (isoDay === isoDateOffset(1))
-            return qsTr("Tomorrow")
-        if (isoDay === isoDateOffset(-1))
-            return qsTr("Yesterday")
-        const parts = isoDay.split("-")
-        if (parts.length !== 3)
-            return isoDay
-        const parsed = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))
-        if (isNaN(parsed.getTime()))
-            return isoDay
-        return Qt.locale("C").toString(parsed, "d MMM yyyy")
-    }
-
-    function formatDueDateTime(isoDay, dueTime) {
-        const dateLabel = formatDueDate(isoDay)
-        if (dateLabel.length === 0)
-            return ""
-        if (dueTime && dueTime.length > 0)
-            return qsTr("%1, %2").arg(dateLabel).arg(dueTime)
-        return dateLabel
     }
 
     readonly property var tagPalette: [

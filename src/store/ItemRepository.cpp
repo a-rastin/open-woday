@@ -16,24 +16,10 @@ QString nowIsoUtc()
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 }
 
-// Date-only values name a calendar day. Timestamps without an offset are
-// local wall times; timestamps with an offset (including Z) name an instant.
-// Invalid values never belong to a day.
-bool fallsOnLocalDay(const std::optional<QString>& value, const QDate& day)
-{
-    if (!value || !day.isValid())
-        return false;
-    if (value->size() == 10) {
-        const QDate date = QDate::fromString(*value, Qt::ISODate);
-        return date.isValid() && date.toString(Qt::ISODate) == *value && date == day;
-    }
-    const QDateTime timestamp = QDateTime::fromString(*value, Qt::ISODate);
-    return timestamp.isValid() && timestamp.toLocalTime().date() == day;
-}
-
-// Nullable-column helpers live in StoreHelpers.h, shared with
-// BlockRepository, so a change to them is made once.
+// Nullable-column and timestamp helpers live in StoreHelpers.h, shared with
+// BlockRepository and the app models.
 using store::bindOptional;
+using store::fallsOnLocalDay;
 using store::readOptionalText;
 using store::readOptionalInt;
 using store::readOptionalId;
@@ -353,16 +339,34 @@ bool ItemRepository::update(const Item& item)
     return true;
 }
 
+std::optional<Item> ItemRepository::setCompleted(const Item& item, bool completed)
+{
+    m_error.clear();
+    if (item.completedAt.has_value() == completed) {
+        return item;
+    }
+
+    Item updated = item;
+    const QString now = nowIsoUtc();
+    updated.completedAt = completed ? std::optional<QString>(now) : std::nullopt;
+    updated.modifiedAt = now;
+    if (!update(updated)) {
+        return std::nullopt;
+    }
+    return updated;
+}
+
 bool ItemRepository::softDelete(qlonglong id)
 {
     m_error.clear();
 
-    // Setting deleted_at is the only change needed to retire an Item and its
-    // active descendant subtasks. Every normal read filters on
-    // deleted_at IS NULL, and the one_day_note_per_day partial index uses the
-    // same predicate, so this UPDATE also drops a Day note out of that index.
-    // Rows keep their fields (visible through readByIdIncludingSoftDeleted)
-    // and never leave orphaned active subtasks behind.
+    // Setting deleted_at is the only change needed to retire an Item (and, for
+    // Tasks, its active descendant Task subtasks). Notes and Events never
+    // cascade even if parent_id links exist in stored data. Every normal read
+    // filters on deleted_at IS NULL, and the one_day_note_per_day partial index
+    // uses the same predicate, so this UPDATE also drops a Day note out of
+    // that index. Rows keep their fields (visible through
+    // readByIdIncludingSoftDeleted) and never leave orphaned active subtasks.
     QSqlDatabase db = m_database.connection();
     if (!db.transaction()) {
         fail(QStringLiteral("could not begin soft-deleting Item %1: %2")
@@ -372,11 +376,14 @@ bool ItemRepository::softDelete(qlonglong id)
 
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "WITH RECURSIVE descendants(id) AS ("
-        "  SELECT id FROM items WHERE id = ? AND deleted_at IS NULL "
+        "WITH RECURSIVE descendants(id, kind) AS ("
+        "  SELECT id, kind FROM items WHERE id = ? AND deleted_at IS NULL "
         "  UNION "
-        "  SELECT items.id FROM items "
-        "  JOIN descendants ON items.parent_id = descendants.id"
+        "  SELECT items.id, items.kind FROM items "
+        "  JOIN descendants ON items.parent_id = descendants.id "
+        "  WHERE descendants.kind = 'task' "
+        "    AND items.kind = 'task' "
+        "    AND items.deleted_at IS NULL"
         ") "
         "UPDATE items SET deleted_at = ? "
         "WHERE id IN (SELECT id FROM descendants) AND deleted_at IS NULL"));

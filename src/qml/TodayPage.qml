@@ -1,5 +1,7 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
+import "components"
 
 Item {
     id: page
@@ -80,8 +82,8 @@ Item {
                 TextField {
                     id: taskTitle
                     width: Math.max(0, parent.width - addTaskButton.width - parent.spacing)
-                    placeholderText: qsTr("New task")
-                    Accessible.name: qsTr("New task")
+                    placeholderText: qsTr("Task title for this day")
+                    Accessible.name: qsTr("Task title for this day")
                     onAccepted: addTaskButton.clicked()
                 }
                 Button {
@@ -104,15 +106,78 @@ Item {
             }
             Component {
                 id: eventLine
-                Text {
+                Item {
+                    id: eventRow
+                    readonly property var eventData: parent.modelData
+                    readonly property bool allDay: Boolean(eventData && eventData.allDay)
+                    readonly property string startTime: eventData && eventData.startTime !== undefined ? eventData.startTime : ""
+                    readonly property string endTime: eventData && eventData.endTime !== undefined ? eventData.endTime : ""
+                    readonly property int priority: eventData && eventData.priority !== undefined ? eventData.priority : 0
+                    readonly property int durationMin: eventData && eventData.durationMin !== undefined ? eventData.durationMin : 0
+                    readonly property string folderName: eventData && eventData.folderName !== undefined ? eventData.folderName : ""
+                    readonly property var tags: eventData && eventData.tags !== undefined ? eventData.tags : []
+                    readonly property string timeRangeText: allDay
+                        ? qsTr("All day")
+                        : (startTime.length > 0 && endTime.length > 0
+                           ? qsTr("%1–%2").arg(startTime).arg(endTime)
+                           : startTime)
+
                     width: taskLines.width
-                    height: 40
-                    text: qsTr("Event: %1").arg(parent.modelData.title)
-                    color: page.theme.panelText
-                    font.family: page.theme.font
-                    font.pixelSize: page.theme.bodySize
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
+                    implicitHeight: Math.max(38, eventContent.implicitHeight + 8)
+                    height: implicitHeight
+
+                    RowLayout {
+                        id: eventContent
+                        anchors.fill: parent
+                        anchors.topMargin: 4
+                        anchors.bottomMargin: 4
+                        anchors.leftMargin: 6
+                        anchors.rightMargin: 4
+                        spacing: page.theme.gap * 0.75
+
+                        Rectangle {
+                            Layout.alignment: Qt.AlignTop
+                            Layout.topMargin: 8
+                            Layout.leftMargin: 5
+                            Layout.rightMargin: 5
+                            implicitWidth: 8
+                            implicitHeight: 8
+                            radius: 4
+                            color: eventRow.priority > 0
+                                ? page.theme.priorityColor(eventRow.priority)
+                                : page.theme.accent
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: eventRow.eventData ? eventRow.eventData.title : ""
+                                color: page.theme.panelText
+                                font.family: page.theme.font
+                                font.pixelSize: page.theme.bodySize
+                                elide: Text.ElideRight
+                            }
+
+                            ItemBadges {
+                                Layout.fillWidth: true
+                                theme: page.theme
+                                leadingText: eventRow.timeRangeText
+                                leadingNeutral: eventRow.allDay
+                                leadingAccessibleName: eventRow.allDay
+                                    ? qsTr("All-day event")
+                                    : (eventRow.timeRangeText.length > 0
+                                       ? qsTr("Event time: %1").arg(eventRow.timeRangeText)
+                                       : "")
+                                priority: eventRow.priority
+                                durationMin: eventRow.durationMin
+                                folderName: eventRow.folderName
+                                tags: eventRow.tags
+                            }
+                        }
+                    }
                 }
             }
             Component {
@@ -120,17 +185,7 @@ Item {
                 TaskRow {
                     width: taskLines.width
                     theme: page.theme
-                    taskId: parent.modelData.id
-                    title: parent.modelData.title
-                    completed: parent.modelData.completed
-                    priority: parent.modelData.priority !== undefined ? parent.modelData.priority : 0
-                    durationMin: parent.modelData.durationMin !== undefined ? parent.modelData.durationMin : 0
-                    dueTime: parent.modelData.dueTime !== undefined ? parent.modelData.dueTime : ""
-                    folderName: parent.modelData.folderName !== undefined ? parent.modelData.folderName : ""
-                    tags: parent.modelData.tags !== undefined ? parent.modelData.tags : []
-                    subtaskDone: parent.modelData.subtaskDone !== undefined ? parent.modelData.subtaskDone : 0
-                    subtaskTotal: parent.modelData.subtaskTotal !== undefined ? parent.modelData.subtaskTotal : 0
-                    subtasks: parent.modelData.subtasks !== undefined ? parent.modelData.subtasks : []
+                    taskData: parent.modelData
                     selectedTaskId: itemModel.hasSelection ? itemModel.selectedId : ""
                     expandedIds: page.expandedTasks
                     onSelectRequested: (id) => itemModel.selectTask(id)

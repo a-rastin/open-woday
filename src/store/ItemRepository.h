@@ -76,10 +76,15 @@ public:
     // Returns false and sets lastError() on failure.
     bool update(const Item& item);
 
+    // Set or clear completed_at and modified_at on an existing Item in SQLite.
+    // Returns the resulting Item on success, or std::nullopt on failure.
+    std::optional<Item> setCompleted(const Item& item, bool completed);
+
     // Soft-delete via deleted_at. Atomically sets deleted_at on the target
-    // Item and all of its active descendant subtasks (parent_id chain at
-    // arbitrary depth) inside a single database transaction. There is no hard
-    // delete and no Trash UI.
+    // Item inside a single database transaction. When the target is a Task,
+    // also cascades to all of its active descendant Task subtasks (parent_id
+    // chain at arbitrary depth); Notes and Events never cascade. There is no
+    // hard delete and no Trash UI.
     bool softDelete(qlonglong id);
 
 private:

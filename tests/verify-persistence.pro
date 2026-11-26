@@ -12,6 +12,7 @@ INCLUDEPATH += $$PWD/../src
 
 SOURCES += verify-persistence.cpp \
            ../src/app/ItemModel.cpp \
+           ../src/app/NoteBuffer.cpp \
            ../src/app/TodayModel.cpp \
            ../src/store/Database.cpp \
            ../src/store/FolderRepository.cpp \
@@ -21,6 +22,7 @@ SOURCES += verify-persistence.cpp \
 
 HEADERS += ../src/store/Database.h \
            ../src/app/ItemModel.h \
+           ../src/app/NoteBuffer.h \
            ../src/app/TodayModel.h \
            ../src/store/StoreHelpers.h \
            ../src/store/FolderRepository.h \

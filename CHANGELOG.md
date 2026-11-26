@@ -66,17 +66,31 @@ design-only history.
   - The shell initially showed a platform-correct `Ctrl` / `⌘` shortcut label
     without live planning pages or Quick Add behaviour.
   - Phase 3 spec at `dev-docs/specs/2026-11-25-06-app-shell/`.
-- **Phase 4 — today-page: partial implementation** on `phase-4-today-page`.
+- **Phase 4 — today-page: Today page and editable Day note.** Merged to `main`
+  in PR #10.
   - A selectable ten-day strip, date label and summary show the selected day's
-    Task and Event counts. Tasks due that day appear as checkable lines.
-  - A plain-text Day note is created or loaded per date and saved locally.
-    Users can add Tasks to the selected date and complete or reopen them;
-    completion and note content persist across restarts.
-  - Event lines and badge chips are not yet rendered; the full Phase 4
-    Task/Event presentation and merge gate remain incomplete.
-  - The framework-free persistence verification covers Today model and restart
-    behaviour. The Phase 4 spec is at
+    Task and Event counts. Tasks and Events due or starting on that day appear
+    on Today.
+  - A plain-text Day note is created or loaded per date and saved locally via
+    debounced persistence. Users can add Tasks to the selected date and complete
+    or reopen them; completion and note content persist across restarts.
+  - The framework-free persistence verification covers Today model, midnight
+    rollover, local-day offset timestamps, formatted-Block protection, and
+    restart survival. The Phase 4 spec is at
     `dev-docs/specs/2026-11-25-13-today-page/`.
+- **Phase 5 — task-crud: full Task lifecycle and detail pane.** In progress on
+  `phase-5-task-crud`.
+  - Store repositories `FolderRepository` and `TagRepository` back Folders,
+    Tags and `item_tags`, and `ItemRepository::softDelete` cascades atomically
+    to active descendant Task subtasks without touching non-Task Items.
+  - `ItemModel` and `NoteBuffer` mediate Task selection, inline rename,
+    completion/reopening, due date and optional 24-hour time scheduling,
+    priority, inline planned duration, Folder filing, multi-Tag attachment,
+    multi-level nested subtasks, and each Task's plain-text Note scaffold.
+  - `TodayPage`, `TaskRow`, `TaskDetailPane` and reusable components (`Checkbox`,
+    `Badge`, `TagChip`, `IconButton`, `ItemBadges`) render Task and Event lines
+    with metadata chips and host the Task detail pane in `RightRail`.
+  - The Phase 5 spec is at `dev-docs/specs/2026-11-26-10-task-crud/`.
 
 ### Changed
 
