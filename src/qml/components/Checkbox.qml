@@ -11,15 +11,7 @@ CheckBox {
 
     signal checkToggled()
 
-    readonly property color priorityColor: {
-        if (priority === 3)
-            return theme.priorityHigh
-        if (priority === 2)
-            return theme.priorityMedium
-        if (priority === 1)
-            return theme.priorityLow
-        return theme.muted
-    }
+    readonly property color priorityColor: theme.priorityColor(priority)
 
     implicitWidth: 20
     implicitHeight: 20

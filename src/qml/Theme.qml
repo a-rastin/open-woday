@@ -34,4 +34,36 @@ QtObject {
     readonly property int bodySize: 14
     readonly property int titleSize: 28
     readonly property size dayStripCell: Qt.size(44, 56)
+
+    function priorityColor(level) {
+        if (level === 3)
+            return priorityHigh
+        if (level === 2)
+            return priorityMedium
+        if (level === 1)
+            return priorityLow
+        return muted
+    }
+
+    function priorityLabel(level) {
+        if (level === 3)
+            return qsTr("High")
+        if (level === 2)
+            return qsTr("Medium")
+        if (level === 1)
+            return qsTr("Low")
+        return qsTr("None")
+    }
+
+    function formatDuration(minutes) {
+        if (minutes <= 0)
+            return ""
+        const hours = Math.floor(minutes / 60)
+        const mins = minutes % 60
+        if (hours > 0 && mins > 0)
+            return qsTr("%1 h %2 min").arg(hours).arg(mins)
+        if (hours > 0)
+            return qsTr("%1 h").arg(hours)
+        return qsTr("%1 min").arg(mins)
+    }
 }

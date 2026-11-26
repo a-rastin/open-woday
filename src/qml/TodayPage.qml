@@ -109,6 +109,7 @@ Item {
                     title: parent.modelData.title
                     completed: parent.modelData.completed
                     priority: parent.modelData.priority !== undefined ? parent.modelData.priority : 0
+                    durationMin: parent.modelData.durationMin !== undefined ? parent.modelData.durationMin : 0
                     selected: itemModel.hasSelection && itemModel.selectedId === parent.modelData.id
                     onSelectRequested: (id) => itemModel.selectTask(id)
                     onToggleCompletedRequested: (id, nextCompleted) => itemModel.setTaskCompleted(id, nextCompleted)

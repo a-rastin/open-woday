@@ -5,6 +5,7 @@
 #include <QString>
 #include <QtGlobal>
 
+#include <functional>
 #include <optional>
 
 class Database;
@@ -23,6 +24,8 @@ class ItemModel : public QObject
     Q_PROPERTY(QString title READ title NOTIFY selectedTaskChanged)
     Q_PROPERTY(bool completed READ completed NOTIFY selectedTaskChanged)
     Q_PROPERTY(int priority READ priority NOTIFY selectedTaskChanged)
+    Q_PROPERTY(bool hasDuration READ hasDuration NOTIFY selectedTaskChanged)
+    Q_PROPERTY(int durationMin READ durationMin NOTIFY selectedTaskChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 
 public:
@@ -33,12 +36,17 @@ public:
     QString title() const;
     bool completed() const;
     int priority() const;
+    bool hasDuration() const;
+    int durationMin() const;
     QString error() const;
 
     Q_INVOKABLE bool selectTask(const QString& id);
     Q_INVOKABLE void clearSelection();
     Q_INVOKABLE bool renameTask(const QString& id, const QString& title);
     Q_INVOKABLE bool setTaskCompleted(const QString& id, bool completed);
+    Q_INVOKABLE bool setTaskPriority(const QString& id, int priority);
+    Q_INVOKABLE bool setTaskDuration(const QString& id, int durationMin);
+    Q_INVOKABLE bool clearTaskDuration(const QString& id);
     Q_INVOKABLE bool deleteTask(const QString& id);
 
 public slots:
@@ -52,6 +60,9 @@ signals:
 
 private:
     std::optional<Item> readTask(const QString& id);
+    bool updateTaskField(const QString& id,
+                         const std::function<bool(const Item&)>& unchanged,
+                         const std::function<void(Item&, const QString& now)>& apply);
     void applySelectedItem(const Item& item);
     void setError(const QString& error);
 
@@ -60,6 +71,7 @@ private:
     QString m_title;
     bool m_completed = false;
     int m_priority = 0;
+    std::optional<int> m_durationMin;
     QString m_error;
 };
 

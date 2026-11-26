@@ -3980,6 +3980,290 @@ int itemSelectionRenameCompletionAndSoftDeleteSurviveRestart()
     return 0;
 }
 
+int priorityLevelsSyncAndPersistAcrossRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    QString firstId;
+    QString secondId;
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+        QObject::connect(&todayModel, &TodayModel::taskUpdated,
+                         &itemModel, &ItemModel::syncTask);
+
+        if (!todayModel.addTask(QStringLiteral("Prepare sprint notes"))
+            || !todayModel.addTask(QStringLiteral("Review pull requests")))
+            return fail(QStringLiteral("could not seed Tasks for priority test"));
+
+        const QVariantList lines = todayModel.lines();
+        if (!check(lines.size() == 2,
+                   QStringLiteral("seeded Tasks missing from Today")))
+            return 1;
+
+        firstId = lines.at(0).toMap().value(QStringLiteral("id")).toString();
+        secondId = lines.at(1).toMap().value(QStringLiteral("id")).toString();
+
+        if (!check(itemModel.selectTask(firstId) && itemModel.priority() == 0,
+                   QStringLiteral("new Task did not default to priority 0")))
+            return 1;
+
+        if (!check(!itemModel.setTaskPriority(firstId, -1)
+                       && !itemModel.error().isEmpty()
+                       && itemModel.priority() == 0,
+                   QStringLiteral("negative priority was not rejected")))
+            return 1;
+
+        if (!check(!itemModel.setTaskPriority(firstId, 4)
+                       && !itemModel.error().isEmpty()
+                       && itemModel.priority() == 0,
+                   QStringLiteral("out-of-range priority was not rejected")))
+            return 1;
+
+        ItemRepository items(database);
+        const auto beforeUpdate = items.readById(firstId.toLongLong());
+        if (!beforeUpdate)
+            return fail(QStringLiteral("could not read Task before priority update"));
+
+        if (!check(itemModel.setTaskPriority(firstId, 3)
+                       && itemModel.error().isEmpty()
+                       && itemModel.priority() == 3
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("priority")).toInt()
+                           == 3,
+                   QStringLiteral("setting high priority did not sync ItemModel and TodayModel")))
+            return 1;
+
+        const auto afterUpdate = items.readById(firstId.toLongLong());
+        if (!check(afterUpdate && afterUpdate->priority == 3
+                       && afterUpdate->modifiedAt >= beforeUpdate->modifiedAt,
+                   QStringLiteral("high priority did not persist to SQLite with modified_at")))
+            return 1;
+
+        if (!check(itemModel.setTaskPriority(firstId, 1)
+                       && itemModel.priority() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("priority")).toInt()
+                           == 1,
+                   QStringLiteral("changing priority to low did not sync")))
+            return 1;
+
+        if (!check(itemModel.setTaskPriority(firstId, 0)
+                       && itemModel.priority() == 0
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("priority")).toInt()
+                           == 0,
+                   QStringLiteral("clearing priority back to None did not sync")))
+            return 1;
+
+        if (!check(itemModel.setTaskPriority(secondId, 2)
+                       && itemModel.selectedId() == firstId
+                       && itemModel.priority() == 0
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("priority")).toInt()
+                           == 2,
+                   QStringLiteral("setting medium priority on non-selected Task did not sync")))
+            return 1;
+
+        // Simulated write failure must preserve priority and report an error.
+        QSqlQuery query(database.connection());
+        if (!query.exec(QStringLiteral(
+                "CREATE TRIGGER fail_priority_update BEFORE UPDATE ON items "
+                "WHEN NEW.kind = 'task' BEGIN SELECT RAISE(FAIL, 'priority blocked'); END")))
+            return fail(query.lastError().text());
+
+        if (!check(!itemModel.setTaskPriority(firstId, 2)
+                       && itemModel.error().contains(QStringLiteral("priority blocked"))
+                       && itemModel.priority() == 0
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("priority")).toInt()
+                           == 0,
+                   QStringLiteral("failed priority update did not preserve state or report error")))
+            return 1;
+
+        if (!query.exec(QStringLiteral("DROP TRIGGER fail_priority_update")))
+            return fail(query.lastError().text());
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+
+        if (!check(todayModel.lines().size() == 2
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("priority")).toInt()
+                           == 0
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("priority")).toInt()
+                           == 2,
+                   QStringLiteral("priority values did not survive restart on TodayModel")))
+            return 1;
+
+        if (!check(itemModel.selectTask(secondId) && itemModel.priority() == 2,
+                   QStringLiteral("priority value did not survive restart in ItemModel")))
+            return 1;
+    }
+
+    return 0;
+}
+
+int plannedDurationSyncAndPersistAcrossRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    QString firstId;
+    QString secondId;
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+        QObject::connect(&todayModel, &TodayModel::taskUpdated,
+                         &itemModel, &ItemModel::syncTask);
+
+        if (!todayModel.addTask(QStringLiteral("Write integration test"))
+            || !todayModel.addTask(QStringLiteral("Clean up worktree")))
+            return fail(QStringLiteral("could not seed Tasks for duration test"));
+
+        const QVariantList lines = todayModel.lines();
+        if (!check(lines.size() == 2,
+                   QStringLiteral("seeded Tasks missing from Today")))
+            return 1;
+
+        firstId = lines.at(0).toMap().value(QStringLiteral("id")).toString();
+        secondId = lines.at(1).toMap().value(QStringLiteral("id")).toString();
+
+        if (!check(itemModel.selectTask(firstId)
+                       && !itemModel.hasDuration()
+                       && itemModel.durationMin() == 0
+                       && lines.at(0).toMap().value(QStringLiteral("durationMin")).toInt() == 0,
+                   QStringLiteral("new Task did not start with unset duration")))
+            return 1;
+
+        if (!check(!itemModel.setTaskDuration(firstId, 0)
+                       && !itemModel.error().isEmpty()
+                       && !itemModel.hasDuration()
+                       && itemModel.durationMin() == 0,
+                   QStringLiteral("zero duration was not rejected")))
+            return 1;
+
+        if (!check(!itemModel.setTaskDuration(firstId, -15)
+                       && !itemModel.error().isEmpty()
+                       && !itemModel.hasDuration(),
+                   QStringLiteral("negative duration was not rejected")))
+            return 1;
+
+        ItemRepository items(database);
+        const auto beforeUpdate = items.readById(firstId.toLongLong());
+        if (!beforeUpdate)
+            return fail(QStringLiteral("could not read Task before duration update"));
+
+        if (!check(itemModel.setTaskDuration(firstId, 45)
+                       && itemModel.error().isEmpty()
+                       && itemModel.hasDuration()
+                       && itemModel.durationMin() == 45
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("durationMin")).toInt()
+                           == 45,
+                   QStringLiteral("setting planned duration did not sync ItemModel and TodayModel")))
+            return 1;
+
+        const auto afterUpdate = items.readById(firstId.toLongLong());
+        if (!check(afterUpdate && afterUpdate->durationMin == std::optional<int>(45)
+                       && afterUpdate->modifiedAt >= beforeUpdate->modifiedAt,
+                   QStringLiteral("planned duration did not persist to SQLite with modified_at")))
+            return 1;
+
+        if (!check(itemModel.setTaskDuration(firstId, 90)
+                       && itemModel.durationMin() == 90
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("durationMin")).toInt()
+                           == 90,
+                   QStringLiteral("editing planned duration did not sync")))
+            return 1;
+
+        if (!check(itemModel.clearTaskDuration(firstId)
+                       && itemModel.error().isEmpty()
+                       && !itemModel.hasDuration()
+                       && itemModel.durationMin() == 0
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("durationMin")).toInt()
+                           == 0,
+                   QStringLiteral("clearing planned duration did not sync")))
+            return 1;
+
+        const auto afterClear = items.readById(firstId.toLongLong());
+        if (!check(afterClear && !afterClear->durationMin.has_value(),
+                   QStringLiteral("clearing planned duration did not clear SQLite duration_min")))
+            return 1;
+
+        if (!check(itemModel.setTaskDuration(secondId, 30)
+                       && itemModel.selectedId() == firstId
+                       && !itemModel.hasDuration()
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("durationMin")).toInt()
+                           == 30,
+                   QStringLiteral("setting duration on non-selected Task did not sync")))
+            return 1;
+
+        // Simulated write failure must preserve duration and report an error.
+        QSqlQuery query(database.connection());
+        if (!query.exec(QStringLiteral(
+                "CREATE TRIGGER fail_duration_update BEFORE UPDATE ON items "
+                "WHEN NEW.kind = 'task' BEGIN SELECT RAISE(FAIL, 'duration blocked'); END")))
+            return fail(query.lastError().text());
+
+        if (!check(!itemModel.setTaskDuration(firstId, 25)
+                       && itemModel.error().contains(QStringLiteral("duration blocked"))
+                       && !itemModel.hasDuration()
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("durationMin")).toInt()
+                           == 0,
+                   QStringLiteral("failed duration update did not preserve state or report error")))
+            return 1;
+
+        if (!query.exec(QStringLiteral("DROP TRIGGER fail_duration_update")))
+            return fail(query.lastError().text());
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        ItemRepository items(database);
+
+        if (!check(todayModel.lines().size() == 2
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("durationMin")).toInt()
+                           == 0
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("durationMin")).toInt()
+                           == 30,
+                   QStringLiteral("planned duration values did not survive restart on TodayModel")))
+            return 1;
+
+        if (!check(itemModel.selectTask(secondId)
+                       && itemModel.hasDuration()
+                       && itemModel.durationMin() == 30,
+                   QStringLiteral("planned duration did not survive restart in ItemModel")))
+            return 1;
+
+        const auto clearedRow = items.readById(firstId.toLongLong());
+        if (!check(clearedRow && !clearedRow->durationMin.has_value(),
+                   QStringLiteral("cleared duration_min did not remain null after restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -4168,6 +4452,12 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (itemSelectionRenameCompletionAndSoftDeleteSurviveRestart() != 0) {
+        return 1;
+    }
+    if (priorityLevelsSyncAndPersistAcrossRestart() != 0) {
+        return 1;
+    }
+    if (plannedDurationSyncAndPersistAcrossRestart() != 0) {
         return 1;
     }
 

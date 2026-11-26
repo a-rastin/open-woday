@@ -448,6 +448,7 @@ void TodayModel::refreshLinesAndSummary()
             {QStringLiteral("title"), item.title},
             {QStringLiteral("completed"), item.completedAt.has_value()},
             {QStringLiteral("priority"), item.priority},
+            {QStringLiteral("durationMin"), item.durationMin.value_or(0)},
         });
     }
     const QList<Item> eventItems = items.readEventsStartingOn(selectedDate());

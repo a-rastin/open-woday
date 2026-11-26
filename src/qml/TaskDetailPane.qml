@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 import "components"
 
@@ -26,11 +27,53 @@ Item {
         }
     }
 
+    function closePopups() {
+        addDetailPopup.close()
+        priorityPopup.close()
+        durationPopup.close()
+    }
+
+    function positionPopupBelow(popup, anchorItem) {
+        const pos = anchorItem.mapToItem(pane, 0, anchorItem.height + 6)
+        const maxLeft = pane.width - popup.width
+        popup.x = popup.width <= pane.width ? Math.max(0, Math.min(pos.x, maxLeft)) : maxLeft
+        popup.y = pos.y
+    }
+
+    function openPriorityEditor(anchorItem) {
+        addDetailPopup.close()
+        durationPopup.close()
+        positionPopupBelow(priorityPopup, anchorItem)
+        priorityPopup.open()
+    }
+
+    function openDurationEditor(anchorItem) {
+        addDetailPopup.close()
+        priorityPopup.close()
+        durationInput.text = itemModel.hasDuration ? String(itemModel.durationMin) : ""
+        positionPopupBelow(durationPopup, anchorItem)
+        durationPopup.open()
+        durationInput.forceActiveFocus()
+        durationInput.selectAll()
+    }
+
+    function submitDurationInput() {
+        const trimmed = durationInput.text.trim()
+        const mins = Number(trimmed)
+        if (!Number.isInteger(mins) || mins <= 0) {
+            itemModel.setTaskDuration(itemModel.selectedId, 0)
+            return
+        }
+        if (itemModel.setTaskDuration(itemModel.selectedId, mins))
+            durationPopup.close()
+    }
+
     Component.onCompleted: syncTitleFromModel()
 
     Connections {
         target: itemModel
         function onSelectionChanged() {
+            pane.closePopups()
             titleInput.focus = false
             titleInput.text = itemModel.title
         }
@@ -70,6 +113,7 @@ Item {
                 toolTipText: qsTr("Close task details")
                 onClicked: {
                     pane.commitTitle()
+                    pane.closePopups()
                     itemModel.clearSelection()
                 }
             }
@@ -137,11 +181,39 @@ Item {
             spacing: pane.theme.gap / 2
 
             Badge {
+                id: priorityBadge
+                readonly property color tone: pane.theme.priorityColor(itemModel.priority)
+                visible: itemModel.priority > 0
+                theme: pane.theme
+                text: pane.theme.priorityLabel(itemModel.priority)
+                accessibleName: qsTr("Priority: %1. Click to edit or clear").arg(text)
+                fillColor: Qt.rgba(tone.r, tone.g, tone.b, 0.12)
+                textColor: tone
+                borderColor: Qt.rgba(tone.r, tone.g, tone.b, 0.25)
+                onClicked: pane.openPriorityEditor(priorityBadge)
+            }
+
+            Badge {
+                id: durationBadge
+                visible: itemModel.hasDuration
+                theme: pane.theme
+                text: pane.theme.formatDuration(itemModel.durationMin)
+                accessibleName: qsTr("Planned duration: %1. Click to edit or clear").arg(text)
+                onClicked: pane.openDurationEditor(durationBadge)
+            }
+
+            Badge {
                 id: addDetailBadge
                 theme: pane.theme
                 text: "+"
                 accessibleName: qsTr("Add task detail")
-                onClicked: pane.addDetailRequested()
+                onClicked: {
+                    pane.addDetailRequested()
+                    priorityPopup.close()
+                    durationPopup.close()
+                    pane.positionPopupBelow(addDetailPopup, addDetailBadge)
+                    addDetailPopup.open()
+                }
             }
         }
 
@@ -157,6 +229,271 @@ Item {
 
         Item {
             Layout.fillHeight: true
+        }
+    }
+
+    Popup {
+        id: addDetailPopup
+        width: Math.max(148, Math.min(180, pane.width))
+        padding: 6
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        background: Rectangle {
+            color: pane.theme.panel
+            border.color: pane.theme.border
+            border.width: 1
+            radius: pane.theme.radiusControl
+        }
+
+        contentItem: ColumnLayout {
+            width: addDetailPopup.availableWidth
+            spacing: 2
+
+            AbstractButton {
+                Layout.fillWidth: true
+                visible: itemModel.priority === 0
+                padding: 6
+                leftPadding: 8
+                rightPadding: 8
+                Accessible.role: Accessible.MenuItem
+                Accessible.name: qsTr("Add priority")
+                onClicked: pane.openPriorityEditor(addDetailBadge)
+
+                background: Rectangle {
+                    radius: pane.theme.radiusControl - 2
+                    color: parent.hovered ? pane.theme.chip : "transparent"
+                }
+
+                contentItem: Text {
+                    text: qsTr("Priority")
+                    color: pane.theme.panelText
+                    font.family: pane.theme.font
+                    font.pixelSize: pane.theme.bodySize - 1
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            AbstractButton {
+                Layout.fillWidth: true
+                visible: !itemModel.hasDuration
+                padding: 6
+                leftPadding: 8
+                rightPadding: 8
+                Accessible.role: Accessible.MenuItem
+                Accessible.name: qsTr("Add duration")
+                onClicked: pane.openDurationEditor(addDetailBadge)
+
+                background: Rectangle {
+                    radius: pane.theme.radiusControl - 2
+                    color: parent.hovered ? pane.theme.chip : "transparent"
+                }
+
+                contentItem: Text {
+                    text: qsTr("Duration")
+                    color: pane.theme.panelText
+                    font.family: pane.theme.font
+                    font.pixelSize: pane.theme.bodySize - 1
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                visible: itemModel.priority > 0 && itemModel.hasDuration
+                padding: 6
+                text: qsTr("All details set")
+                color: pane.theme.muted
+                font.family: pane.theme.font
+                font.pixelSize: pane.theme.bodySize - 1
+            }
+        }
+    }
+
+    Popup {
+        id: priorityPopup
+        width: Math.max(152, Math.min(180, pane.width))
+        padding: 6
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        background: Rectangle {
+            color: pane.theme.panel
+            border.color: pane.theme.border
+            border.width: 1
+            radius: pane.theme.radiusControl
+        }
+
+        contentItem: ColumnLayout {
+            width: priorityPopup.availableWidth
+            spacing: 2
+
+            Text {
+                Layout.fillWidth: true
+                leftPadding: 8
+                topPadding: 2
+                bottomPadding: 2
+                text: qsTr("Priority")
+                color: pane.theme.muted
+                font.family: pane.theme.font
+                font.pixelSize: pane.theme.bodySize - 2
+            }
+
+            Repeater {
+                model: [3, 2, 1, 0]
+
+                delegate: AbstractButton {
+                    id: priorityOption
+                    required property int modelData
+                    readonly property bool isCurrent: itemModel.priority === modelData
+                    readonly property color levelColor: pane.theme.priorityColor(modelData)
+
+                    Layout.fillWidth: true
+                    padding: 6
+                    leftPadding: 8
+                    rightPadding: 8
+                    Accessible.role: Accessible.MenuItem
+                    Accessible.name: pane.theme.priorityLabel(modelData)
+                    onClicked: {
+                        if (itemModel.setTaskPriority(itemModel.selectedId, modelData))
+                            priorityPopup.close()
+                    }
+
+                    background: Rectangle {
+                        radius: pane.theme.radiusControl - 2
+                        color: priorityOption.isCurrent || priorityOption.hovered
+                            ? pane.theme.chip
+                            : "transparent"
+                    }
+
+                    contentItem: RowLayout {
+                        spacing: 8
+
+                        Rectangle {
+                            implicitWidth: 8
+                            implicitHeight: 8
+                            radius: 4
+                            color: priorityOption.modelData > 0
+                                ? priorityOption.levelColor
+                                : "transparent"
+                            border.color: priorityOption.levelColor
+                            border.width: priorityOption.modelData > 0 ? 0 : 1.5
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: pane.theme.priorityLabel(priorityOption.modelData)
+                            color: pane.theme.panelText
+                            font.family: pane.theme.font
+                            font.pixelSize: pane.theme.bodySize - 1
+                            font.bold: priorityOption.isCurrent
+                        }
+
+                        Text {
+                            visible: priorityOption.isCurrent
+                            text: "✓"
+                            color: pane.theme.muted
+                            font.family: pane.theme.font
+                            font.pixelSize: pane.theme.bodySize - 2
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Popup {
+        id: durationPopup
+        width: 216
+        padding: 8
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        background: Rectangle {
+            color: pane.theme.panel
+            border.color: pane.theme.border
+            border.width: 1
+            radius: pane.theme.radiusControl
+        }
+
+        contentItem: ColumnLayout {
+            width: durationPopup.availableWidth
+            spacing: 8
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 4
+
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("Planned duration")
+                    color: pane.theme.muted
+                    font.family: pane.theme.font
+                    font.pixelSize: pane.theme.bodySize - 2
+                }
+
+                Badge {
+                    visible: itemModel.hasDuration
+                    theme: pane.theme
+                    text: qsTr("Clear")
+                    textColor: pane.theme.accent
+                    accessibleName: qsTr("Clear planned duration")
+                    padding: 2
+                    leftPadding: 8
+                    rightPadding: 8
+                    onClicked: {
+                        if (itemModel.clearTaskDuration(itemModel.selectedId))
+                            durationPopup.close()
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                TextField {
+                    id: durationInput
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("Minutes")
+                    font.family: pane.theme.font
+                    font.pixelSize: pane.theme.bodySize - 1
+                    inputMethodHints: Qt.ImhDigitsOnly
+                    validator: IntValidator {
+                        bottom: 1
+                        top: 10080
+                    }
+                    Accessible.name: qsTr("Planned duration in minutes")
+                    onAccepted: pane.submitDurationInput()
+                }
+
+                Button {
+                    text: qsTr("Set")
+                    onClicked: pane.submitDurationInput()
+                }
+            }
+
+            Flow {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Repeater {
+                    model: [15, 30, 45, 60, 90, 120]
+
+                    delegate: Badge {
+                        required property int modelData
+                        readonly property bool isCurrent: itemModel.durationMin === modelData
+                        theme: pane.theme
+                        text: pane.theme.formatDuration(modelData)
+                        fillColor: isCurrent ? pane.theme.accent : pane.theme.chip
+                        textColor: isCurrent ? pane.theme.panel : pane.theme.panelText
+                        padding: 3
+                        leftPadding: 8
+                        rightPadding: 8
+                        onClicked: {
+                            if (itemModel.setTaskDuration(itemModel.selectedId, modelData))
+                                durationPopup.close()
+                        }
+                    }
+                }
+            }
         }
     }
 }

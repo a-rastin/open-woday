@@ -47,6 +47,16 @@ int ItemModel::priority() const
     return m_priority;
 }
 
+bool ItemModel::hasDuration() const
+{
+    return m_durationMin.has_value() && *m_durationMin > 0;
+}
+
+int ItemModel::durationMin() const
+{
+    return hasDuration() ? *m_durationMin : 0;
+}
+
 QString ItemModel::error() const
 {
     return m_error;
@@ -81,12 +91,14 @@ void ItemModel::applySelectedItem(const Item& item)
     const bool taskChanged = idChanged
         || m_title != item.title
         || m_completed != nextCompleted
-        || m_priority != item.priority;
+        || m_priority != item.priority
+        || m_durationMin != item.durationMin;
 
     m_selectedId = item.id;
     m_title = item.title;
     m_completed = nextCompleted;
     m_priority = item.priority;
+    m_durationMin = item.durationMin;
 
     if (idChanged)
         emit selectionChanged();
@@ -122,12 +134,13 @@ void ItemModel::clearSelection()
 {
     const bool hadSelection = (m_selectedId != 0);
     const bool hadTaskData = hadSelection || !m_title.isEmpty() || m_completed
-        || m_priority != 0;
+        || m_priority != 0 || m_durationMin.has_value();
 
     m_selectedId = 0;
     m_title.clear();
     m_completed = false;
     m_priority = 0;
+    m_durationMin = std::nullopt;
     setError({});
 
     if (hadSelection)
@@ -202,6 +215,83 @@ bool ItemModel::setTaskCompleted(const QString& id, bool completed)
         applySelectedItem(updated);
     emit taskMutated(updated.id);
     return true;
+}
+
+bool ItemModel::updateTaskField(
+    const QString& id,
+    const std::function<bool(const Item&)>& unchanged,
+    const std::function<void(Item&, const QString& now)>& apply)
+{
+    const std::optional<Item> stored = readTask(id);
+    if (!stored)
+        return false;
+
+    if (unchanged(*stored)) {
+        setError({});
+        if (stored->id == m_selectedId)
+            applySelectedItem(*stored);
+        return true;
+    }
+
+    Item updated = *stored;
+    apply(updated, nowIsoUtc());
+
+    ItemRepository items(m_database);
+    if (!items.update(updated)) {
+        setError(items.lastError());
+        return false;
+    }
+
+    setError({});
+    if (updated.id == m_selectedId)
+        applySelectedItem(updated);
+    emit taskMutated(updated.id);
+    return true;
+}
+
+bool ItemModel::setTaskPriority(const QString& id, int priority)
+{
+    if (priority < 0 || priority > 3) {
+        setError(QStringLiteral("Task priority must be None, Low, Medium, or High."));
+        return false;
+    }
+
+    return updateTaskField(
+        id,
+        [priority](const Item& item) { return item.priority == priority; },
+        [priority](Item& updated, const QString& now) {
+            updated.priority = priority;
+            updated.modifiedAt = now;
+        });
+}
+
+bool ItemModel::setTaskDuration(const QString& id, int durationMin)
+{
+    if (durationMin <= 0) {
+        setError(QStringLiteral("Planned duration must be a positive number of minutes."));
+        return false;
+    }
+
+    return updateTaskField(
+        id,
+        [durationMin](const Item& item) {
+            return item.durationMin == std::optional<int>(durationMin);
+        },
+        [durationMin](Item& updated, const QString& now) {
+            updated.durationMin = durationMin;
+            updated.modifiedAt = now;
+        });
+}
+
+bool ItemModel::clearTaskDuration(const QString& id)
+{
+    return updateTaskField(
+        id,
+        [](const Item& item) { return !item.durationMin.has_value(); },
+        [](Item& updated, const QString& now) {
+            updated.durationMin = std::nullopt;
+            updated.modifiedAt = now;
+        });
 }
 
 bool ItemModel::deleteTask(const QString& id)
