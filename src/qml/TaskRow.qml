@@ -89,8 +89,10 @@ ColumnLayout {
         color: root.isSelected
             ? root.theme.chip
             : (rowHover.hovered ? Qt.rgba(0, 0, 0, 0.03) : "transparent")
-        border.color: root.isSelected ? root.theme.border : "transparent"
-        border.width: root.isSelected ? 1 : 0
+        border.color: selectButton.visualFocus
+            ? root.theme.accent
+            : (root.isSelected ? root.theme.border : "transparent")
+        border.width: (selectButton.visualFocus || root.isSelected) ? 1 : 0
 
         HoverHandler {
             id: rowHover
@@ -99,6 +101,7 @@ ColumnLayout {
         MouseArea {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
+            enabled: !root.editing
             onClicked: root.selectRequested(root.taskId)
         }
 
@@ -127,25 +130,48 @@ ColumnLayout {
 
                 Item {
                     Layout.fillWidth: true
-                    implicitHeight: Math.max(titleLabel.implicitHeight, renameField.implicitHeight, 26)
+                    implicitHeight: Math.max(selectButton.implicitHeight, renameField.implicitHeight, 26)
 
-                    Text {
-                        id: titleLabel
+                    AbstractButton {
+                        id: selectButton
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
+                        implicitHeight: Math.max(titleLabel.implicitHeight, 26)
                         visible: !root.editing
+                        padding: 0
                         text: root.title
-                        color: root.completed ? root.theme.muted : root.theme.panelText
-                        font.family: root.theme.font
-                        font.pixelSize: root.depth > 0 ? root.theme.bodySize - 1 : root.theme.bodySize
-                        font.strikeout: root.completed
-                        elide: Text.ElideRight
+                        focusPolicy: Qt.StrongFocus
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.Button
+                        Accessible.name: root.title.length > 0
+                            ? qsTr("Select %1").arg(root.title)
+                            : qsTr("Select task")
+                        onClicked: root.selectRequested(root.taskId)
+                        onDoubleClicked: root.beginRename()
+                        Keys.onReturnPressed: (event) => {
+                            event.accepted = true
+                            selectButton.clicked()
+                        }
+                        Keys.onEnterPressed: (event) => {
+                            event.accepted = true
+                            selectButton.clicked()
+                        }
 
-                        MouseArea {
-                            anchors.fill: parent
-                            onClicked: root.selectRequested(root.taskId)
-                            onDoubleClicked: root.beginRename()
+                        background: Rectangle {
+                            radius: root.theme.radiusControl - 2
+                            color: "transparent"
+                        }
+
+                        contentItem: Text {
+                            id: titleLabel
+                            text: root.title
+                            color: root.completed ? root.theme.muted : root.theme.panelText
+                            font.family: root.theme.font
+                            font.pixelSize: root.depth > 0 ? root.theme.bodySize - 1 : root.theme.bodySize
+                            font.strikeout: root.completed
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
                         }
                     }
 
@@ -158,10 +184,16 @@ ColumnLayout {
                         font.family: root.theme.font
                         font.pixelSize: root.depth > 0 ? root.theme.bodySize - 1 : root.theme.bodySize
                         Accessible.name: qsTr("Rename task")
-                        onAccepted: root.commitRename()
+                        onAccepted: {
+                            root.commitRename()
+                            if (selectButton)
+                                selectButton.forceActiveFocus(Qt.TabFocusReason)
+                        }
                         Keys.onEscapePressed: (event) => {
                             event.accepted = true
                             root.cancelRename()
+                            if (selectButton)
+                                selectButton.forceActiveFocus(Qt.TabFocusReason)
                         }
                         onActiveFocusChanged: {
                             if (!activeFocus && root.editing)
@@ -198,7 +230,7 @@ ColumnLayout {
                 iconKind: "add"
                 toolTipText: qsTr("Add subtask")
                 visible: !root.editing
-                opacity: rowHover.hovered || root.isSelected || activeFocus ? 1 : 0.35
+                opacity: rowHover.hovered || root.isSelected || selectButton.activeFocus || activeFocus ? 1 : 0.35
                 onClicked: root.beginAddSubtask()
             }
 
@@ -208,7 +240,7 @@ ColumnLayout {
                 iconKind: "edit"
                 toolTipText: qsTr("Rename task")
                 visible: !root.editing
-                opacity: rowHover.hovered || root.isSelected || activeFocus ? 1 : 0.35
+                opacity: rowHover.hovered || root.isSelected || selectButton.activeFocus || activeFocus ? 1 : 0.35
                 onClicked: root.beginRename()
             }
 
@@ -219,7 +251,7 @@ ColumnLayout {
                 destructive: true
                 toolTipText: qsTr("Delete task")
                 visible: !root.editing
-                opacity: rowHover.hovered || root.isSelected || activeFocus ? 1 : 0.35
+                opacity: rowHover.hovered || root.isSelected || selectButton.activeFocus || activeFocus ? 1 : 0.35
                 onClicked: root.deleteRequested(root.taskId)
             }
         }
