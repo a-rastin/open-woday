@@ -125,6 +125,8 @@ design-only history.
   chip rendering into `ItemBadges.qml`, Task completion timestamps into
   `ItemRepository::setCompleted`, and calendar day/time parsing into
   `StoreHelpers.h`.
+- `TodayModel::refresh()` now loads Tags for all displayed Tasks, subtasks and
+  Events in a single batched query via `TagRepository::readForItems`.
 
 ### Fixed
 
@@ -156,3 +158,10 @@ design-only history.
   `startTime`, `endTime`, `priority`, `durationMin`, `folderName`, `tags`) for
   Today badge chips, and commit inline Task title edits to the edited Task
   rather than a newly selected Task.
+- Phase 5 follow-up fixes flush any dirty Task Note (on the Task or a selected
+  descendant subtask) before deletion and abort on failure, make `TaskRow`
+  keyboard-selectable with visible focus indicators, preserve the inline
+  new-subtask field when creation fails, count all active Task children in
+  Today subtask totals regardless of child due date, keep selected Task state
+  intact when related repository reads fail, and match Tag names
+  case-insensitively in `TagRepository`.
