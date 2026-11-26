@@ -12,6 +12,7 @@
         <file alias="TaskDetailPane.qml">src/qml/TaskDetailPane.qml</file>
         <file alias="components/Checkbox.qml">src/qml/components/Checkbox.qml</file>
         <file alias="components/Badge.qml">src/qml/components/Badge.qml</file>
+        <file alias="components/TagChip.qml">src/qml/components/TagChip.qml</file>
         <file alias="components/IconButton.qml">src/qml/components/IconButton.qml</file>
     </qresource>
     <qresource prefix="/store">

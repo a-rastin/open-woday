@@ -13,6 +13,8 @@ Rectangle {
     property int priority: 0
     property int durationMin: 0
     property string dueTime: ""
+    property string folderName: ""
+    property var tags: []
     property bool selected: false
     property bool editing: false
 
@@ -131,7 +133,9 @@ Rectangle {
             Flow {
                 Layout.fillWidth: true
                 spacing: 6
-                visible: !root.editing && (root.dueTime.length > 0 || root.priority > 0 || root.durationMin > 0)
+                visible: !root.editing && (root.dueTime.length > 0 || root.priority > 0
+                    || root.durationMin > 0 || root.folderName.length > 0
+                    || (root.tags && root.tags.length > 0))
 
                 Badge {
                     visible: root.dueTime.length > 0
@@ -173,6 +177,33 @@ Rectangle {
                     padding: 2
                     leftPadding: 8
                     rightPadding: 8
+                }
+
+                Badge {
+                    visible: root.folderName.length > 0
+                    interactive: false
+                    theme: root.theme
+                    text: root.folderName
+                    accessibleName: qsTr("Folder: %1").arg(text)
+                    fillColor: root.theme.chip
+                    textColor: root.theme.panelText
+                    borderColor: root.theme.border
+                    padding: 2
+                    leftPadding: 8
+                    rightPadding: 8
+                }
+
+                Repeater {
+                    model: root.tags
+
+                    delegate: TagChip {
+                        required property var modelData
+                        theme: root.theme
+                        tagName: modelData.name
+                        tagColour: modelData.colour !== undefined ? modelData.colour : ""
+                        removable: false
+                        verticalPadding: 2
+                    }
                 }
             }
         }

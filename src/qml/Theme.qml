@@ -99,4 +99,47 @@ QtObject {
             return qsTr("%1, %2").arg(dateLabel).arg(dueTime)
         return dateLabel
     }
+
+    readonly property var tagPalette: [
+        { fill: "#E6F4EA", text: "#1E6B3A", border: "#B7DFC2" },
+        { fill: "#E8F0FE", text: "#1D4ED8", border: "#BFDBFE" },
+        { fill: "#F3E8FD", text: "#6D28D9", border: "#DDD6FE" },
+        { fill: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
+        { fill: "#FCE7F3", text: "#9D174D", border: "#FBCFE8" },
+        { fill: "#E0F2FE", text: "#0369A1", border: "#BAE6FD" }
+    ]
+
+    function validHexColor(colour) {
+        return typeof colour === "string" && /^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/.test(colour)
+    }
+
+    function tagPaletteEntry(tagName) {
+        let hash = 0
+        const text = tagName || ""
+        for (let i = 0; i < text.length; ++i)
+            hash = ((hash * 31) + text.charCodeAt(i)) >>> 0
+        return tagPalette[hash % tagPalette.length]
+    }
+
+    function tagFillColor(tagName, customColour) {
+        if (validHexColor(customColour)) {
+            const c = Qt.color(customColour)
+            return Qt.rgba(c.r, c.g, c.b, 0.14)
+        }
+        return tagPaletteEntry(tagName).fill
+    }
+
+    function tagTextColor(tagName, customColour) {
+        if (validHexColor(customColour))
+            return Qt.darker(Qt.color(customColour), 1.35)
+        return tagPaletteEntry(tagName).text
+    }
+
+    function tagBorderColor(tagName, customColour) {
+        if (validHexColor(customColour)) {
+            const c = Qt.color(customColour)
+            return Qt.rgba(c.r, c.g, c.b, 0.30)
+        }
+        return tagPaletteEntry(tagName).border
+    }
 }

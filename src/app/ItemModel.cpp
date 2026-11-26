@@ -1,11 +1,14 @@
 #include "ItemModel.h"
 
 #include "store/Database.h"
+#include "store/FolderRepository.h"
 #include "store/ItemRepository.h"
+#include "store/TagRepository.h"
 
 #include <QDate>
 #include <QDateTime>
 #include <QTime>
+#include <QVariantMap>
 
 namespace {
 
@@ -79,12 +82,25 @@ DueFields extractDueFields(const Item& item)
     return fields;
 }
 
+QVariantMap tagToMap(const Tag& tag)
+{
+    return QVariantMap{
+        { QStringLiteral("id"), QString::number(tag.id) },
+        { QStringLiteral("name"), tag.name },
+        { QStringLiteral("colour"), tag.colour.value_or(QString()) },
+    };
+}
+
 } // namespace
 
 ItemModel::ItemModel(Database& database, QObject* parent)
     : QObject(parent),
       m_database(database)
 {
+    if (m_database.connection().isOpen()) {
+        refreshFolders();
+        refreshAvailableTags();
+    }
 }
 
 bool ItemModel::hasSelection() const
@@ -147,6 +163,36 @@ QString ItemModel::duePrecision() const
     return m_duePrecision;
 }
 
+bool ItemModel::hasFolder() const
+{
+    return m_folderId.has_value() && *m_folderId > 0;
+}
+
+QString ItemModel::folderId() const
+{
+    return hasFolder() ? QString::number(*m_folderId) : QString();
+}
+
+QString ItemModel::folderName() const
+{
+    return m_folderName;
+}
+
+QVariantList ItemModel::tags() const
+{
+    return m_tags;
+}
+
+QVariantList ItemModel::folders() const
+{
+    return m_folders;
+}
+
+QVariantList ItemModel::availableTags() const
+{
+    return m_availableTags;
+}
+
 QString ItemModel::error() const
 {
     return m_error;
@@ -179,6 +225,23 @@ void ItemModel::applySelectedItem(const Item& item)
     const bool idChanged = (m_selectedId != item.id);
     const bool nextCompleted = item.completedAt.has_value();
     const DueFields due = extractDueFields(item);
+
+    QString nextFolderName;
+    if (item.folderId && *item.folderId > 0) {
+        FolderRepository folders(m_database);
+        const std::optional<Folder> folder = folders.readById(*item.folderId);
+        if (folder)
+            nextFolderName = folder->name;
+    }
+
+    QVariantList nextTags;
+    TagRepository tagRepo(m_database);
+    const QList<Tag> storedTags = tagRepo.readForItem(item.id);
+    nextTags.reserve(storedTags.size());
+    for (const Tag& tag : storedTags) {
+        nextTags.append(tagToMap(tag));
+    }
+
     const bool taskChanged = idChanged
         || m_title != item.title
         || m_completed != nextCompleted
@@ -186,7 +249,10 @@ void ItemModel::applySelectedItem(const Item& item)
         || m_durationMin != item.durationMin
         || m_dueDate != due.date
         || m_dueTime != due.time
-        || m_duePrecision != due.precision;
+        || m_duePrecision != due.precision
+        || m_folderId != item.folderId
+        || m_folderName != nextFolderName
+        || m_tags != nextTags;
 
     m_selectedId = item.id;
     m_title = item.title;
@@ -196,11 +262,59 @@ void ItemModel::applySelectedItem(const Item& item)
     m_dueDate = due.date;
     m_dueTime = due.time;
     m_duePrecision = due.precision;
+    m_folderId = item.folderId;
+    m_folderName = nextFolderName;
+    m_tags = nextTags;
 
     if (idChanged)
         emit selectionChanged();
     if (taskChanged)
         emit selectedTaskChanged();
+}
+
+void ItemModel::refreshFolders()
+{
+    FolderRepository folderRepo(m_database);
+    const QList<Folder> stored = folderRepo.readAll();
+    if (!folderRepo.lastError().isEmpty()) {
+        setError(folderRepo.lastError());
+        return;
+    }
+
+    QVariantList nextFolders;
+    nextFolders.reserve(stored.size());
+    for (const Folder& folder : stored) {
+        nextFolders.append(QVariantMap{
+            { QStringLiteral("id"), QString::number(folder.id) },
+            { QStringLiteral("name"), folder.name },
+        });
+    }
+
+    if (m_folders != nextFolders) {
+        m_folders = nextFolders;
+        emit foldersChanged();
+    }
+}
+
+void ItemModel::refreshAvailableTags()
+{
+    TagRepository tagRepo(m_database);
+    const QList<Tag> stored = tagRepo.readAll();
+    if (!tagRepo.lastError().isEmpty()) {
+        setError(tagRepo.lastError());
+        return;
+    }
+
+    QVariantList nextTags;
+    nextTags.reserve(stored.size());
+    for (const Tag& tag : stored) {
+        nextTags.append(tagToMap(tag));
+    }
+
+    if (m_availableTags != nextTags) {
+        m_availableTags = nextTags;
+        emit availableTagsChanged();
+    }
 }
 
 void ItemModel::setError(const QString& error)
@@ -232,7 +346,8 @@ void ItemModel::clearSelection()
     const bool hadSelection = (m_selectedId != 0);
     const bool hadTaskData = hadSelection || !m_title.isEmpty() || m_completed
         || m_priority != 0 || m_durationMin.has_value()
-        || !m_dueDate.isEmpty() || !m_dueTime.isEmpty() || !m_duePrecision.isEmpty();
+        || !m_dueDate.isEmpty() || !m_dueTime.isEmpty() || !m_duePrecision.isEmpty()
+        || m_folderId.has_value() || !m_folderName.isEmpty() || !m_tags.isEmpty();
 
     m_selectedId = 0;
     m_title.clear();
@@ -242,6 +357,9 @@ void ItemModel::clearSelection()
     m_dueDate.clear();
     m_dueTime.clear();
     m_duePrecision.clear();
+    m_folderId = std::nullopt;
+    m_folderName.clear();
+    m_tags.clear();
     setError({});
 
     if (hadSelection)
@@ -505,6 +623,185 @@ bool ItemModel::clearTaskDueDate(const QString& id)
             updated.duePrecision = std::nullopt;
             updated.modifiedAt = now;
         });
+}
+
+QString ItemModel::createFolder(const QString& name)
+{
+    FolderRepository folderRepo(m_database);
+    const std::optional<Folder> created = folderRepo.create(name);
+    if (!created) {
+        setError(folderRepo.lastError());
+        return QString();
+    }
+
+    setError({});
+    refreshFolders();
+    return QString::number(created->id);
+}
+
+bool ItemModel::setTaskFolder(const QString& id, const QString& folderId)
+{
+    if (folderId.trimmed().isEmpty())
+        return clearTaskFolder(id);
+
+    bool valid = false;
+    const qlonglong parsedFolderId = folderId.toLongLong(&valid);
+    if (!valid || parsedFolderId <= 0) {
+        setError(QStringLiteral("The selected Folder identifier is invalid."));
+        return false;
+    }
+
+    FolderRepository folderRepo(m_database);
+    const std::optional<Folder> folder = folderRepo.readById(parsedFolderId);
+    if (!folderRepo.lastError().isEmpty()) {
+        setError(folderRepo.lastError());
+        return false;
+    }
+    if (!folder) {
+        setError(QStringLiteral("The selected Folder could not be found."));
+        return false;
+    }
+
+    return updateTaskField(
+        id,
+        [parsedFolderId](const Item& item) {
+            return item.folderId == std::optional<qlonglong>(parsedFolderId);
+        },
+        [parsedFolderId](Item& updated, const QString& now) {
+            updated.folderId = parsedFolderId;
+            updated.modifiedAt = now;
+        });
+}
+
+bool ItemModel::createAndAssignFolder(const QString& id, const QString& name)
+{
+    if (!readTask(id))
+        return false;
+
+    const QString createdId = createFolder(name);
+    if (createdId.isEmpty())
+        return false;
+
+    return setTaskFolder(id, createdId);
+}
+
+bool ItemModel::clearTaskFolder(const QString& id)
+{
+    return updateTaskField(
+        id,
+        [](const Item& item) { return !item.folderId.has_value(); },
+        [](Item& updated, const QString& now) {
+            updated.folderId = std::nullopt;
+            updated.modifiedAt = now;
+        });
+}
+
+QString ItemModel::createTag(const QString& name)
+{
+    TagRepository tagRepo(m_database);
+    const std::optional<Tag> tag = tagRepo.findOrCreate(name);
+    if (!tag) {
+        setError(tagRepo.lastError());
+        return QString();
+    }
+
+    setError({});
+    refreshAvailableTags();
+    return QString::number(tag->id);
+}
+
+bool ItemModel::attachTag(const QString& id, const QString& tagId)
+{
+    const std::optional<Item> stored = readTask(id);
+    if (!stored)
+        return false;
+
+    bool valid = false;
+    const qlonglong parsedTagId = tagId.toLongLong(&valid);
+    if (!valid || parsedTagId <= 0) {
+        setError(QStringLiteral("The selected Tag identifier is invalid."));
+        return false;
+    }
+
+    TagRepository tagRepo(m_database);
+    const std::optional<Tag> tag = tagRepo.readById(parsedTagId);
+    if (!tagRepo.lastError().isEmpty()) {
+        setError(tagRepo.lastError());
+        return false;
+    }
+    if (!tag) {
+        setError(QStringLiteral("The selected Tag could not be found."));
+        return false;
+    }
+
+    if (!tagRepo.attachToItem(stored->id, parsedTagId)) {
+        setError(tagRepo.lastError());
+        return false;
+    }
+
+    setError({});
+    if (stored->id == m_selectedId)
+        applySelectedItem(*stored);
+    emit taskMutated(stored->id);
+    return true;
+}
+
+bool ItemModel::attachTagByName(const QString& id, const QString& tagName)
+{
+    const std::optional<Item> stored = readTask(id);
+    if (!stored)
+        return false;
+
+    const QString trimmed = tagName.trimmed();
+    if (trimmed.isEmpty()) {
+        setError(QStringLiteral("Tag name cannot be empty."));
+        return false;
+    }
+
+    TagRepository tagRepo(m_database);
+    const std::optional<Tag> tag = tagRepo.findOrCreate(trimmed);
+    if (!tag) {
+        setError(tagRepo.lastError());
+        return false;
+    }
+
+    if (!tagRepo.attachToItem(stored->id, tag->id)) {
+        setError(tagRepo.lastError());
+        return false;
+    }
+
+    setError({});
+    refreshAvailableTags();
+    if (stored->id == m_selectedId)
+        applySelectedItem(*stored);
+    emit taskMutated(stored->id);
+    return true;
+}
+
+bool ItemModel::detachTag(const QString& id, const QString& tagId)
+{
+    const std::optional<Item> stored = readTask(id);
+    if (!stored)
+        return false;
+
+    bool valid = false;
+    const qlonglong parsedTagId = tagId.toLongLong(&valid);
+    if (!valid || parsedTagId <= 0) {
+        setError(QStringLiteral("The selected Tag identifier is invalid."));
+        return false;
+    }
+
+    TagRepository tagRepo(m_database);
+    if (!tagRepo.detachFromItem(stored->id, parsedTagId)) {
+        setError(tagRepo.lastError());
+        return false;
+    }
+
+    setError({});
+    if (stored->id == m_selectedId)
+        applySelectedItem(*stored);
+    emit taskMutated(stored->id);
+    return true;
 }
 
 bool ItemModel::deleteTask(const QString& id)

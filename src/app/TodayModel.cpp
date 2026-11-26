@@ -2,12 +2,15 @@
 
 #include "store/Database.h"
 #include "store/BlockRepository.h"
+#include "store/FolderRepository.h"
 #include "store/ItemRepository.h"
+#include "store/TagRepository.h"
 
 #include <QLocale>
 #include <QDateTime>
 #include <QCoreApplication>
 #include <QGuiApplication>
+#include <QHash>
 #include <QTimeZone>
 #include <utility>
 
@@ -435,12 +438,38 @@ void TodayModel::refreshLinesAndSummary()
     // The store is the single source of truth: normal reads exclude
     // soft-deleted Items, so the counts describe the selected day's live Items.
     ItemRepository items(m_database);
-    QVariantList lines;
     const QList<Item> taskItems = items.readTasksDueOn(selectedDate());
     if (!items.lastError().isEmpty()) {
         setRefreshError(items.lastError());
         return;
     }
+    const QList<Item> eventItems = items.readEventsStartingOn(selectedDate());
+    if (!items.lastError().isEmpty()) {
+        setRefreshError(items.lastError());
+        return;
+    }
+
+    QHash<qlonglong, QString> folderNames;
+    bool needsFolders = false;
+    for (const Item& item : taskItems) {
+        if (item.folderId && *item.folderId > 0) {
+            needsFolders = true;
+            break;
+        }
+    }
+    if (needsFolders) {
+        FolderRepository folderRepo(m_database);
+        const QList<Folder> folders = folderRepo.readAll();
+        if (!folderRepo.lastError().isEmpty()) {
+            setRefreshError(folderRepo.lastError());
+            return;
+        }
+        for (const Folder& folder : folders)
+            folderNames.insert(folder.id, folder.name);
+    }
+
+    TagRepository tagRepo(m_database);
+    QVariantList lines;
     for (const Item& item : taskItems) {
         QString dueTime;
         if (item.dueAt && item.duePrecision == QStringLiteral("time")
@@ -449,6 +478,29 @@ void TodayModel::refreshLinesAndSummary()
             if (dt.isValid())
                 dueTime = dt.toLocalTime().time().toString(QStringLiteral("HH:mm"));
         }
+
+        const QList<Tag> itemTags = tagRepo.readForItem(item.id);
+        if (!tagRepo.lastError().isEmpty()) {
+            setRefreshError(tagRepo.lastError());
+            return;
+        }
+        QVariantList tagList;
+        tagList.reserve(itemTags.size());
+        for (const Tag& tag : itemTags) {
+            tagList.append(QVariantMap{
+                {QStringLiteral("id"), QString::number(tag.id)},
+                {QStringLiteral("name"), tag.name},
+                {QStringLiteral("colour"), tag.colour.value_or(QString())},
+            });
+        }
+
+        const QString folderId = (item.folderId && *item.folderId > 0)
+            ? QString::number(*item.folderId)
+            : QString();
+        const QString folderName = (item.folderId && *item.folderId > 0)
+            ? folderNames.value(*item.folderId)
+            : QString();
+
         lines.append(QVariantMap{
             {QStringLiteral("id"), QString::number(item.id)},
             {QStringLiteral("kind"), kTaskKind},
@@ -457,12 +509,10 @@ void TodayModel::refreshLinesAndSummary()
             {QStringLiteral("priority"), item.priority},
             {QStringLiteral("durationMin"), item.durationMin.value_or(0)},
             {QStringLiteral("dueTime"), dueTime},
+            {QStringLiteral("folderId"), folderId},
+            {QStringLiteral("folderName"), folderName},
+            {QStringLiteral("tags"), tagList},
         });
-    }
-    const QList<Item> eventItems = items.readEventsStartingOn(selectedDate());
-    if (!items.lastError().isEmpty()) {
-        setRefreshError(items.lastError());
-        return;
     }
     for (const Item& item : eventItems) {
         lines.append(QVariantMap{

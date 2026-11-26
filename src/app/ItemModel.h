@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QVariantList>
 #include <QtGlobal>
 
 #include <functional>
@@ -31,6 +32,12 @@ class ItemModel : public QObject
     Q_PROPERTY(bool hasDueTime READ hasDueTime NOTIFY selectedTaskChanged)
     Q_PROPERTY(QString dueTime READ dueTime NOTIFY selectedTaskChanged)
     Q_PROPERTY(QString duePrecision READ duePrecision NOTIFY selectedTaskChanged)
+    Q_PROPERTY(bool hasFolder READ hasFolder NOTIFY selectedTaskChanged)
+    Q_PROPERTY(QString folderId READ folderId NOTIFY selectedTaskChanged)
+    Q_PROPERTY(QString folderName READ folderName NOTIFY selectedTaskChanged)
+    Q_PROPERTY(QVariantList tags READ tags NOTIFY selectedTaskChanged)
+    Q_PROPERTY(QVariantList folders READ folders NOTIFY foldersChanged)
+    Q_PROPERTY(QVariantList availableTags READ availableTags NOTIFY availableTagsChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 
 public:
@@ -48,6 +55,12 @@ public:
     bool hasDueTime() const;
     QString dueTime() const;
     QString duePrecision() const;
+    bool hasFolder() const;
+    QString folderId() const;
+    QString folderName() const;
+    QVariantList tags() const;
+    QVariantList folders() const;
+    QVariantList availableTags() const;
     QString error() const;
 
     Q_INVOKABLE bool selectTask(const QString& id);
@@ -64,6 +77,14 @@ public:
                                         const QString& time);
     Q_INVOKABLE bool clearTaskDueTime(const QString& id);
     Q_INVOKABLE bool clearTaskDueDate(const QString& id);
+    Q_INVOKABLE QString createFolder(const QString& name);
+    Q_INVOKABLE bool setTaskFolder(const QString& id, const QString& folderId);
+    Q_INVOKABLE bool createAndAssignFolder(const QString& id, const QString& name);
+    Q_INVOKABLE bool clearTaskFolder(const QString& id);
+    Q_INVOKABLE QString createTag(const QString& name);
+    Q_INVOKABLE bool attachTag(const QString& id, const QString& tagId);
+    Q_INVOKABLE bool attachTagByName(const QString& id, const QString& tagName);
+    Q_INVOKABLE bool detachTag(const QString& id, const QString& tagId);
     Q_INVOKABLE bool deleteTask(const QString& id);
 
 public slots:
@@ -72,6 +93,8 @@ public slots:
 signals:
     void selectionChanged();
     void selectedTaskChanged();
+    void foldersChanged();
+    void availableTagsChanged();
     void errorChanged();
     void taskMutated(qlonglong id);
 
@@ -81,6 +104,8 @@ private:
                          const std::function<bool(const Item&)>& unchanged,
                          const std::function<void(Item&, const QString& now)>& apply);
     void applySelectedItem(const Item& item);
+    void refreshFolders();
+    void refreshAvailableTags();
     void setError(const QString& error);
 
     Database& m_database;
@@ -92,6 +117,11 @@ private:
     QString m_dueDate;
     QString m_dueTime;
     QString m_duePrecision;
+    std::optional<qlonglong> m_folderId;
+    QString m_folderName;
+    QVariantList m_tags;
+    QVariantList m_folders;
+    QVariantList m_availableTags;
     QString m_error;
 };
 

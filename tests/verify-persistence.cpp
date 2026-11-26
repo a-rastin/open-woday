@@ -36,7 +36,9 @@
 
 #include "store/Database.h"
 #include "store/BlockRepository.h"
+#include "store/FolderRepository.h"
 #include "store/ItemRepository.h"
+#include "store/TagRepository.h"
 #include "app/ItemModel.h"
 #include "app/TodayModel.h"
 
@@ -4645,6 +4647,300 @@ int dueTimeSchedulingSyncAndPersistAcrossRestart()
     return 0;
 }
 
+int folderAndTagRepositoriesSurviveRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    qlonglong workFolderId = 0;
+    qlonglong homeFolderId = 0;
+    qlonglong focusTagId = 0;
+    qlonglong healthTagId = 0;
+    qlonglong taskId = 0;
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        FolderRepository folders(database);
+        TagRepository tags(database);
+        ItemRepository items(database);
+
+        if (!check(!folders.create(QStringLiteral("   ")) && !folders.lastError().isEmpty(),
+                   QStringLiteral("blank Folder name was not rejected")))
+            return 1;
+
+        const auto work = folders.create(QStringLiteral("Work"));
+        const auto home = folders.create(QStringLiteral("Personal"));
+        if (!work || !home)
+            return fail(folders.lastError());
+        workFolderId = work->id;
+        homeFolderId = home->id;
+
+        if (!check(folders.readAll().size() == 2 && folders.readById(workFolderId)->name == QStringLiteral("Work"),
+                   QStringLiteral("created Folders could not be listed or read")))
+            return 1;
+
+        if (!check(!tags.create(QStringLiteral("  ")) && !tags.lastError().isEmpty(),
+                   QStringLiteral("blank Tag name was not rejected")))
+            return 1;
+
+        const auto focus = tags.create(QStringLiteral("Focus"), QStringLiteral("#3B82F6"));
+        const auto health = tags.findOrCreate(QStringLiteral("Health"));
+        if (!focus || !health)
+            return fail(tags.lastError());
+        focusTagId = focus->id;
+        healthTagId = health->id;
+
+        // Creating a duplicate Tag by unique name fails cleanly; findOrCreate returns existing.
+        if (!check(!tags.create(QStringLiteral("Focus")) && !tags.lastError().isEmpty(),
+                   QStringLiteral("duplicate Tag creation was not rejected")))
+            return 1;
+
+        const auto reused = tags.findOrCreate(QStringLiteral("Focus"));
+        if (!check(reused && reused->id == focusTagId
+                       && reused->colour == std::optional<QString>(QStringLiteral("#3B82F6")),
+                   QStringLiteral("findOrCreate did not return existing Tag by unique name")))
+            return 1;
+
+        Item task;
+        task.kind = QStringLiteral("task");
+        task.title = QStringLiteral("Prepare quarterly plan");
+        task.folderId = workFolderId;
+        const auto createdTask = items.create(task);
+        if (!createdTask)
+            return fail(items.lastError());
+        taskId = createdTask->id;
+
+        if (!check(tags.attachToItem(taskId, focusTagId)
+                       && tags.attachToItem(taskId, healthTagId)
+                       && tags.attachToItem(taskId, focusTagId),
+                   QStringLiteral("attaching Tags to an Item failed")))
+            return 1;
+
+        // Invalid FK references fail loudly rather than being silently ignored.
+        if (!check(!tags.attachToItem(999999, focusTagId) && !tags.lastError().isEmpty(),
+                   QStringLiteral("attaching Tag to unknown Item was not rejected")))
+            return 1;
+
+        const QList<Tag> attached = tags.readForItem(taskId);
+        if (!check(attached.size() == 2,
+                   QStringLiteral("reading Tags for Item did not return both attached Tags")))
+            return 1;
+
+        if (!check(tags.detachFromItem(taskId, healthTagId)
+                       && tags.readForItem(taskId).size() == 1
+                       && tags.readForItem(taskId).first().id == focusTagId,
+                   QStringLiteral("detaching Tag from Item failed")))
+            return 1;
+
+        // Re-attach second Tag so both survive restart.
+        if (!check(tags.attachToItem(taskId, healthTagId),
+                   QStringLiteral("re-attaching second Tag failed")))
+            return 1;
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        FolderRepository folders(database);
+        TagRepository tags(database);
+        ItemRepository items(database);
+
+        const QList<Folder> folderList = folders.readAll();
+        if (!check(folderList.size() == 2
+                       && folderList.at(0).id == workFolderId
+                       && folderList.at(1).id == homeFolderId,
+                   QStringLiteral("Folders did not survive restart")))
+            return 1;
+
+        const QList<Tag> tagList = tags.readAll();
+        if (!check(tagList.size() == 2
+                       && tags.findByName(QStringLiteral("Focus"))->id == focusTagId
+                       && tags.findByName(QStringLiteral("Health"))->id == healthTagId,
+                   QStringLiteral("Tags did not survive restart")))
+            return 1;
+
+        const auto task = items.readById(taskId);
+        const QList<Tag> itemTags = tags.readForItem(taskId);
+        if (!check(task && task->folderId == std::optional<qlonglong>(workFolderId)
+                       && itemTags.size() == 2,
+                   QStringLiteral("Item Folder or attached Tags did not survive restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
+int foldersAndTagsSyncAndPersistAcrossRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    QString firstId;
+    QString secondId;
+    QString workFolderId;
+    QString personalFolderId;
+    QString focusTagId;
+    QString urgentTagId;
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+        QObject::connect(&todayModel, &TodayModel::taskUpdated,
+                         &itemModel, &ItemModel::syncTask);
+
+        if (!todayModel.addTask(QStringLiteral("Draft release notes"))
+            || !todayModel.addTask(QStringLiteral("Schedule clinic visit")))
+            return fail(QStringLiteral("could not seed Tasks for Folder/Tag test"));
+
+        const QVariantList initialLines = todayModel.lines();
+        if (!check(initialLines.size() == 2,
+                   QStringLiteral("seeded Tasks missing from Today")))
+            return 1;
+
+        firstId = initialLines.at(0).toMap().value(QStringLiteral("id")).toString();
+        secondId = initialLines.at(1).toMap().value(QStringLiteral("id")).toString();
+
+        if (!check(itemModel.selectTask(firstId)
+                       && !itemModel.hasFolder()
+                       && itemModel.folderId().isEmpty()
+                       && itemModel.folderName().isEmpty()
+                       && itemModel.tags().isEmpty()
+                       && itemModel.folders().isEmpty()
+                       && itemModel.availableTags().isEmpty(),
+                   QStringLiteral("initial Task should have no Folder or Tags")))
+            return 1;
+
+        // Invalid Folder/Tag operations fail cleanly with diagnostics.
+        if (!check(itemModel.createFolder(QStringLiteral("  ")).isEmpty()
+                       && !itemModel.error().isEmpty(),
+                   QStringLiteral("blank Folder creation was not rejected")))
+            return 1;
+        if (!check(!itemModel.attachTagByName(firstId, QStringLiteral("   "))
+                       && !itemModel.error().isEmpty(),
+                   QStringLiteral("blank Tag attachment was not rejected")))
+            return 1;
+
+        // Create Folder and file first Task; create second Folder directly on second Task.
+        workFolderId = itemModel.createFolder(QStringLiteral("Work"));
+        if (!check(!workFolderId.isEmpty()
+                       && itemModel.error().isEmpty()
+                       && itemModel.folders().size() == 1
+                       && itemModel.setTaskFolder(firstId, workFolderId)
+                       && itemModel.hasFolder()
+                       && itemModel.folderId() == workFolderId
+                       && itemModel.folderName() == QStringLiteral("Work")
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("folderId")).toString()
+                           == workFolderId
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("folderName")).toString()
+                           == QStringLiteral("Work"),
+                   QStringLiteral("assigning Folder did not sync ItemModel and TodayModel")))
+            return 1;
+
+        if (!check(itemModel.createAndAssignFolder(secondId, QStringLiteral("Health"))
+                       && itemModel.folders().size() == 2
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("folderName")).toString()
+                           == QStringLiteral("Health"),
+                   QStringLiteral("createAndAssignFolder on non-selected Task failed")))
+            return 1;
+
+        personalFolderId = itemModel.createFolder(QStringLiteral("Personal"));
+        if (!check(!personalFolderId.isEmpty()
+                       && itemModel.setTaskFolder(firstId, personalFolderId)
+                       && itemModel.folderId() == personalFolderId
+                       && itemModel.folderName() == QStringLiteral("Personal")
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("folderName")).toString()
+                           == QStringLiteral("Personal"),
+                   QStringLiteral("changing assigned Folder did not sync")))
+            return 1;
+
+        // Clear Folder on second Task.
+        if (!check(itemModel.clearTaskFolder(secondId)
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("folderId")).toString().isEmpty()
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("folderName")).toString().isEmpty(),
+                   QStringLiteral("clearing Task Folder did not sync TodayModel")))
+            return 1;
+
+        // Attach multiple Tags (create on the fly and reuse existing).
+        if (!check(itemModel.attachTagByName(firstId, QStringLiteral("Focus"))
+                       && itemModel.attachTagByName(firstId, QStringLiteral("Urgent"))
+                       && itemModel.availableTags().size() == 2
+                       && itemModel.tags().size() == 2,
+                   QStringLiteral("attaching multiple Tags on selected Task failed")))
+            return 1;
+
+        focusTagId = itemModel.tags().at(0).toMap().value(QStringLiteral("id")).toString();
+        urgentTagId = itemModel.tags().at(1).toMap().value(QStringLiteral("id")).toString();
+        if (itemModel.tags().at(0).toMap().value(QStringLiteral("name")).toString() != QStringLiteral("Focus")) {
+            std::swap(focusTagId, urgentTagId);
+        }
+
+        // Reuse existing Tag on second Task without duplicating in availableTags.
+        if (!check(itemModel.attachTagByName(secondId, QStringLiteral("Focus"))
+                       && itemModel.availableTags().size() == 2
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("tags")).toList().size() == 2
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("tags")).toList().size() == 1,
+                   QStringLiteral("TodayModel lines did not reflect attached Tags")))
+            return 1;
+
+        // Detach one Tag from first Task.
+        if (!check(itemModel.detachTag(firstId, urgentTagId)
+                       && itemModel.tags().size() == 1
+                       && itemModel.tags().at(0).toMap().value(QStringLiteral("id")).toString() == focusTagId
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("tags")).toList().size() == 1,
+                   QStringLiteral("detaching Tag did not sync ItemModel and TodayModel")))
+            return 1;
+
+        // Re-attach Urgent so multiple Tags survive restart on first Task.
+        if (!check(itemModel.attachTag(firstId, urgentTagId)
+                       && itemModel.tags().size() == 2,
+                   QStringLiteral("attaching existing Tag by id failed")))
+            return 1;
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+
+        if (!check(todayModel.lines().size() == 2
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("folderId")).toString()
+                           == personalFolderId
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("folderName")).toString()
+                           == QStringLiteral("Personal")
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("tags")).toList().size() == 2
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("folderId")).toString().isEmpty()
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("tags")).toList().size() == 1,
+                   QStringLiteral("Folder and Tag state on TodayModel did not survive restart")))
+            return 1;
+
+        if (!check(itemModel.selectTask(firstId)
+                       && itemModel.hasFolder()
+                       && itemModel.folderId() == personalFolderId
+                       && itemModel.folderName() == QStringLiteral("Personal")
+                       && itemModel.tags().size() == 2
+                       && itemModel.folders().size() == 3
+                       && itemModel.availableTags().size() == 2,
+                   QStringLiteral("Folder and Tag state did not reload in ItemModel after restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -4845,6 +5141,12 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (dueTimeSchedulingSyncAndPersistAcrossRestart() != 0) {
+        return 1;
+    }
+    if (folderAndTagRepositoriesSurviveRestart() != 0) {
+        return 1;
+    }
+    if (foldersAndTagsSyncAndPersistAcrossRestart() != 0) {
         return 1;
     }
 

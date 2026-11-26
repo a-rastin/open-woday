@@ -32,6 +32,8 @@ Item {
         dueDatePopup.close()
         priorityPopup.close()
         durationPopup.close()
+        folderPopup.close()
+        tagPopup.close()
     }
 
     function positionPopupBelow(popup, anchorItem) {
@@ -42,9 +44,7 @@ Item {
     }
 
     function openDueDateEditor(anchorItem) {
-        addDetailPopup.close()
-        priorityPopup.close()
-        durationPopup.close()
+        closePopups()
         dueDateInput.text = itemModel.hasDueDate
             ? itemModel.dueDate
             : pane.theme.isoDateOffset(0)
@@ -63,17 +63,13 @@ Item {
     }
 
     function openPriorityEditor(anchorItem) {
-        addDetailPopup.close()
-        dueDatePopup.close()
-        durationPopup.close()
+        closePopups()
         positionPopupBelow(priorityPopup, anchorItem)
         priorityPopup.open()
     }
 
     function openDurationEditor(anchorItem) {
-        addDetailPopup.close()
-        dueDatePopup.close()
-        priorityPopup.close()
+        closePopups()
         durationInput.text = itemModel.hasDuration ? String(itemModel.durationMin) : ""
         positionPopupBelow(durationPopup, anchorItem)
         durationPopup.open()
@@ -90,6 +86,43 @@ Item {
         }
         if (itemModel.setTaskDuration(itemModel.selectedId, mins))
             durationPopup.close()
+    }
+
+    function openFolderEditor(anchorItem) {
+        closePopups()
+        newFolderInput.text = ""
+        positionPopupBelow(folderPopup, anchorItem)
+        folderPopup.open()
+    }
+
+    function submitNewFolderInput() {
+        const trimmed = newFolderInput.text.trim()
+        if (itemModel.createAndAssignFolder(itemModel.selectedId, trimmed)) {
+            newFolderInput.text = ""
+            folderPopup.close()
+        }
+    }
+
+    function openTagEditor(anchorItem) {
+        closePopups()
+        tagInput.text = ""
+        positionPopupBelow(tagPopup, anchorItem)
+        tagPopup.open()
+        tagInput.forceActiveFocus()
+    }
+
+    function submitNewTagInput() {
+        if (itemModel.attachTagByName(itemModel.selectedId, tagInput.text))
+            tagInput.text = ""
+    }
+
+    function isTagAttached(tagId) {
+        const attached = itemModel.tags
+        for (let i = 0; i < attached.length; ++i) {
+            if (attached[i].id === tagId)
+                return true
+        }
+        return false
     }
 
     Component.onCompleted: syncTitleFromModel()
@@ -243,15 +276,36 @@ Item {
             }
 
             Badge {
+                id: folderBadge
+                visible: itemModel.hasFolder
+                theme: pane.theme
+                text: itemModel.folderName
+                borderColor: pane.theme.border
+                accessibleName: qsTr("Folder: %1. Click to change or clear").arg(text)
+                onClicked: pane.openFolderEditor(folderBadge)
+            }
+
+            Repeater {
+                model: itemModel.tags
+
+                delegate: TagChip {
+                    required property var modelData
+                    theme: pane.theme
+                    tagName: modelData.name
+                    tagColour: modelData.colour !== undefined ? modelData.colour : ""
+                    removable: true
+                    onRemoveRequested: itemModel.detachTag(itemModel.selectedId, modelData.id)
+                }
+            }
+
+            Badge {
                 id: addDetailBadge
                 theme: pane.theme
                 text: "+"
                 accessibleName: qsTr("Add task detail")
                 onClicked: {
                     pane.addDetailRequested()
-                    dueDatePopup.close()
-                    priorityPopup.close()
-                    durationPopup.close()
+                    pane.closePopups()
                     pane.positionPopupBelow(addDetailPopup, addDetailBadge)
                     addDetailPopup.open()
                 }
@@ -362,14 +416,51 @@ Item {
                 }
             }
 
-            Text {
+            AbstractButton {
                 Layout.fillWidth: true
-                visible: itemModel.hasDueDate && itemModel.priority > 0 && itemModel.hasDuration
+                visible: !itemModel.hasFolder
                 padding: 6
-                text: qsTr("All details set")
-                color: pane.theme.muted
-                font.family: pane.theme.font
-                font.pixelSize: pane.theme.bodySize - 1
+                leftPadding: 8
+                rightPadding: 8
+                Accessible.role: Accessible.MenuItem
+                Accessible.name: qsTr("Add folder")
+                onClicked: pane.openFolderEditor(addDetailBadge)
+
+                background: Rectangle {
+                    radius: pane.theme.radiusControl - 2
+                    color: parent.hovered ? pane.theme.chip : "transparent"
+                }
+
+                contentItem: Text {
+                    text: qsTr("Folder")
+                    color: pane.theme.panelText
+                    font.family: pane.theme.font
+                    font.pixelSize: pane.theme.bodySize - 1
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            AbstractButton {
+                Layout.fillWidth: true
+                padding: 6
+                leftPadding: 8
+                rightPadding: 8
+                Accessible.role: Accessible.MenuItem
+                Accessible.name: qsTr("Add tag")
+                onClicked: pane.openTagEditor(addDetailBadge)
+
+                background: Rectangle {
+                    radius: pane.theme.radiusControl - 2
+                    color: parent.hovered ? pane.theme.chip : "transparent"
+                }
+
+                contentItem: Text {
+                    text: qsTr("Add tag")
+                    color: pane.theme.panelText
+                    font.family: pane.theme.font
+                    font.pixelSize: pane.theme.bodySize - 1
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
         }
     }
@@ -721,6 +812,264 @@ Item {
                         onClicked: {
                             if (itemModel.setTaskDuration(itemModel.selectedId, modelData))
                                 durationPopup.close()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Popup {
+        id: folderPopup
+        width: 220
+        padding: 8
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        background: Rectangle {
+            color: pane.theme.panel
+            border.color: pane.theme.border
+            border.width: 1
+            radius: pane.theme.radiusControl
+        }
+
+        contentItem: ColumnLayout {
+            width: folderPopup.availableWidth
+            spacing: 6
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 4
+
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("Folder")
+                    color: pane.theme.muted
+                    font.family: pane.theme.font
+                    font.pixelSize: pane.theme.bodySize - 2
+                }
+
+                Badge {
+                    visible: itemModel.hasFolder
+                    theme: pane.theme
+                    text: qsTr("Clear")
+                    textColor: pane.theme.accent
+                    accessibleName: qsTr("Clear folder")
+                    padding: 2
+                    leftPadding: 8
+                    rightPadding: 8
+                    onClicked: {
+                        if (itemModel.clearTaskFolder(itemModel.selectedId))
+                            folderPopup.close()
+                    }
+                }
+            }
+
+            Flickable {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(160, folderListColumn.implicitHeight)
+                visible: itemModel.folders.length > 0
+                contentWidth: width
+                contentHeight: folderListColumn.implicitHeight
+                clip: true
+
+                ColumnLayout {
+                    id: folderListColumn
+                    width: parent.width
+                    spacing: 2
+
+                    Repeater {
+                        model: itemModel.folders
+
+                        delegate: AbstractButton {
+                            id: folderOption
+                            required property var modelData
+                            readonly property bool isCurrent: itemModel.folderId === modelData.id
+
+                            Layout.fillWidth: true
+                            padding: 6
+                            leftPadding: 8
+                            rightPadding: 8
+                            Accessible.role: Accessible.MenuItem
+                            Accessible.name: modelData.name
+                            onClicked: {
+                                if (itemModel.setTaskFolder(itemModel.selectedId, modelData.id))
+                                    folderPopup.close()
+                            }
+
+                            background: Rectangle {
+                                radius: pane.theme.radiusControl - 2
+                                color: folderOption.isCurrent || folderOption.hovered
+                                    ? pane.theme.chip
+                                    : "transparent"
+                            }
+
+                            contentItem: RowLayout {
+                                spacing: 8
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: folderOption.modelData.name
+                                    color: pane.theme.panelText
+                                    font.family: pane.theme.font
+                                    font.pixelSize: pane.theme.bodySize - 1
+                                    font.bold: folderOption.isCurrent
+                                    elide: Text.ElideRight
+                                }
+
+                                Text {
+                                    visible: folderOption.isCurrent
+                                    text: "✓"
+                                    color: pane.theme.muted
+                                    font.family: pane.theme.font
+                                    font.pixelSize: pane.theme.bodySize - 2
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                TextField {
+                    id: newFolderInput
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("New folder")
+                    font.family: pane.theme.font
+                    font.pixelSize: pane.theme.bodySize - 1
+                    Accessible.name: qsTr("New folder name")
+                    onAccepted: pane.submitNewFolderInput()
+                }
+
+                Button {
+                    text: qsTr("Create")
+                    enabled: newFolderInput.text.trim().length > 0
+                    onClicked: pane.submitNewFolderInput()
+                }
+            }
+        }
+    }
+
+    Popup {
+        id: tagPopup
+        width: 228
+        padding: 8
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        background: Rectangle {
+            color: pane.theme.panel
+            border.color: pane.theme.border
+            border.width: 1
+            radius: pane.theme.radiusControl
+        }
+
+        contentItem: ColumnLayout {
+            width: tagPopup.availableWidth
+            spacing: 6
+
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("Tags")
+                color: pane.theme.muted
+                font.family: pane.theme.font
+                font.pixelSize: pane.theme.bodySize - 2
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                TextField {
+                    id: tagInput
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("New or existing tag")
+                    font.family: pane.theme.font
+                    font.pixelSize: pane.theme.bodySize - 1
+                    Accessible.name: qsTr("Tag name")
+                    onAccepted: pane.submitNewTagInput()
+                }
+
+                Button {
+                    text: qsTr("Add")
+                    enabled: tagInput.text.trim().length > 0
+                    onClicked: pane.submitNewTagInput()
+                }
+            }
+
+            Flickable {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(180, tagListColumn.implicitHeight)
+                visible: itemModel.availableTags.length > 0
+                contentWidth: width
+                contentHeight: tagListColumn.implicitHeight
+                clip: true
+
+                ColumnLayout {
+                    id: tagListColumn
+                    width: parent.width
+                    spacing: 2
+
+                    Repeater {
+                        model: itemModel.availableTags
+
+                        delegate: AbstractButton {
+                            id: tagOption
+                            required property var modelData
+                            readonly property string tagColour: modelData.colour !== undefined ? modelData.colour : ""
+                            readonly property bool attached: pane.isTagAttached(modelData.id)
+
+                            Layout.fillWidth: true
+                            padding: 6
+                            leftPadding: 8
+                            rightPadding: 8
+                            Accessible.role: Accessible.MenuItem
+                            Accessible.name: modelData.name
+                            onClicked: {
+                                if (tagOption.attached)
+                                    itemModel.detachTag(itemModel.selectedId, tagOption.modelData.id)
+                                else
+                                    itemModel.attachTag(itemModel.selectedId, tagOption.modelData.id)
+                            }
+
+                            background: Rectangle {
+                                radius: pane.theme.radiusControl - 2
+                                color: tagOption.attached || tagOption.hovered
+                                    ? pane.theme.chip
+                                    : "transparent"
+                            }
+
+                            contentItem: RowLayout {
+                                spacing: 8
+
+                                Rectangle {
+                                    implicitWidth: 10
+                                    implicitHeight: 10
+                                    radius: 5
+                                    color: pane.theme.tagFillColor(tagOption.modelData.name, tagOption.tagColour)
+                                    border.color: pane.theme.tagBorderColor(tagOption.modelData.name, tagOption.tagColour)
+                                    border.width: 1
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: tagOption.modelData.name
+                                    color: pane.theme.panelText
+                                    font.family: pane.theme.font
+                                    font.pixelSize: pane.theme.bodySize - 1
+                                    font.bold: tagOption.attached
+                                    elide: Text.ElideRight
+                                }
+
+                                Text {
+                                    visible: tagOption.attached
+                                    text: "✓"
+                                    color: pane.theme.muted
+                                    font.family: pane.theme.font
+                                    font.pixelSize: pane.theme.bodySize - 2
+                                }
+                            }
                         }
                     }
                 }
