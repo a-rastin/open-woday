@@ -3,10 +3,13 @@
 
 #include "Database.h"
 
+#include <QDate>
+#include <QDateTime>
 #include <QList>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QString>
+#include <QTime>
 #include <QVariant>
 #include <QtGlobal>
 
@@ -52,6 +55,100 @@ inline std::optional<qlonglong> readOptionalId(const QSqlQuery& query, int field
         return std::nullopt;
     }
     return value.toLongLong();
+}
+
+struct LocalTimestamp
+{
+    QDate date;
+    std::optional<QTime> time;
+};
+
+inline std::optional<QDate> parseIsoCalendarDay(const QString& input)
+{
+    const QString trimmed = input.trimmed();
+    if (trimmed.size() != 10) {
+        return std::nullopt;
+    }
+    const QDate date = QDate::fromString(trimmed, Qt::ISODate);
+    if (!date.isValid() || date.toString(Qt::ISODate) != trimmed) {
+        return std::nullopt;
+    }
+    return date;
+}
+
+inline std::optional<QTime> parseIso24HourTime(const QString& input)
+{
+    const QString trimmed = input.trimmed();
+    if (trimmed.size() != 5 || trimmed.at(2) != QLatin1Char(':')) {
+        return std::nullopt;
+    }
+    const QTime time = QTime::fromString(trimmed, QStringLiteral("HH:mm"));
+    if (!time.isValid() || time.toString(QStringLiteral("HH:mm")) != trimmed) {
+        return std::nullopt;
+    }
+    return time;
+}
+
+// Date-only values name a calendar day. Timestamps without an offset are
+// local wall times (parsed directly so daylight-saving gaps never shift);
+// timestamps with an offset (including Z) name an instant converted to local
+// time. Invalid values return std::nullopt.
+inline std::optional<LocalTimestamp> parseIsoTimestamp(const QString& value)
+{
+    if (value.size() == 10) {
+        const auto date = parseIsoCalendarDay(value);
+        if (!date) {
+            return std::nullopt;
+        }
+        return LocalTimestamp{ *date, std::nullopt };
+    }
+
+    if (value.size() > 10
+        && (value.at(10) == QLatin1Char('T') || value.at(10) == QLatin1Char(' '))) {
+        const QString timeAndZone = value.mid(11);
+        const bool hasOffset = timeAndZone.contains(QLatin1Char('Z'))
+            || timeAndZone.contains(QLatin1Char('z'))
+            || timeAndZone.contains(QLatin1Char('+'))
+            || timeAndZone.contains(QLatin1Char('-'));
+        if (!hasOffset) {
+            const auto date = parseIsoCalendarDay(value.left(10));
+            const QTime time = QTime::fromString(timeAndZone, Qt::ISODate);
+            if (!date || !time.isValid()) {
+                return std::nullopt;
+            }
+            return LocalTimestamp{ *date, time };
+        }
+
+        const QDateTime dt = QDateTime::fromString(value, Qt::ISODate);
+        if (!dt.isValid()) {
+            return std::nullopt;
+        }
+        const QDateTime local = dt.toLocalTime();
+        return LocalTimestamp{ local.date(), local.time() };
+    }
+
+    return std::nullopt;
+}
+
+inline bool fallsOnLocalDay(const std::optional<QString>& value, const QDate& day)
+{
+    if (!value || !day.isValid()) {
+        return false;
+    }
+    const auto parsed = parseIsoTimestamp(*value);
+    return parsed.has_value() && parsed->date == day;
+}
+
+inline QString extractLocalTimeHHmm(const std::optional<QString>& value)
+{
+    if (!value || value->size() <= 10) {
+        return QString();
+    }
+    const auto parsed = parseIsoTimestamp(*value);
+    if (!parsed || !parsed->time) {
+        return QString();
+    }
+    return parsed->time->toString(QStringLiteral("HH:mm"));
 }
 
 } // namespace store

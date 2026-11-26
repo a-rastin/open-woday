@@ -332,7 +332,7 @@ bool BlockRepository::replaceText(qlonglong itemId, const QString& text)
     m_error.clear();
     QSqlDatabase db = m_database.connection();
     if (!db.transaction()) {
-        fail(QStringLiteral("could not begin writing Day note: %1")
+        fail(QStringLiteral("could not begin writing Note: %1")
                  .arg(db.lastError().text()));
         return false;
     }
@@ -343,7 +343,7 @@ bool BlockRepository::replaceText(qlonglong itemId, const QString& text)
     }
     for (const Block& block : existing) {
         if (!isPlainText(block)) {
-            fail(QStringLiteral("This note contains formatted blocks that cannot be edited in the plain-text editor."));
+            fail(QStringLiteral("This Note contains formatted Blocks that cannot be edited in the plain-text editor."));
             db.rollback();
             return false;
         }
@@ -360,7 +360,7 @@ bool BlockRepository::replaceText(qlonglong itemId, const QString& text)
             update.addBindValue(i);
             update.addBindValue(existing.at(i).id);
             if (!update.exec()) {
-                fail(QStringLiteral("could not update Day note Block: %1").arg(update.lastError().text()));
+                fail(QStringLiteral("could not update Note Block: %1").arg(update.lastError().text()));
                 db.rollback();
                 return false;
             }
@@ -374,7 +374,7 @@ bool BlockRepository::replaceText(qlonglong itemId, const QString& text)
         insert.addBindValue(i);
         insert.addBindValue(lines.at(i).isNull() ? QStringLiteral("") : lines.at(i));
         if (!insert.exec()) {
-            fail(QStringLiteral("could not write Day note Block: %1")
+            fail(QStringLiteral("could not write Note Block: %1")
                      .arg(insert.lastError().text()));
             db.rollback();
             return false;
@@ -385,13 +385,13 @@ bool BlockRepository::replaceText(qlonglong itemId, const QString& text)
         remove.prepare(QStringLiteral("DELETE FROM blocks WHERE id = ?"));
         remove.addBindValue(existing.at(i).id);
         if (!remove.exec()) {
-            fail(QStringLiteral("could not remove Day note Blocks: %1").arg(remove.lastError().text()));
+            fail(QStringLiteral("could not remove Note Blocks: %1").arg(remove.lastError().text()));
             db.rollback();
             return false;
         }
     }
     if (!db.commit()) {
-        fail(QStringLiteral("could not commit Day note: %1").arg(db.lastError().text()));
+        fail(QStringLiteral("could not commit Note: %1").arg(db.lastError().text()));
         db.rollback();
         return false;
     }

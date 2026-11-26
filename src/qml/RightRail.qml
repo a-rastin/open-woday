@@ -1,7 +1,7 @@
 import QtQuick
 
-// The future Inbox and detail surface. It remains a clean frame with no live
-// Item data until the corresponding product phase.
+// Hosts the Task detail pane when a Task is selected; otherwise remains a
+// clean idle rail ready for the Inbox surface in a later phase.
 Rectangle {
     id: rightRail
 
@@ -12,4 +12,15 @@ Rectangle {
 
     color: rightRail.theme.panel
     radius: rightRail.theme.radiusPanel
+
+    Loader {
+        anchors.fill: parent
+        anchors.margins: rightRail.theme.gap * 1.25
+        active: itemModel.hasSelection
+        sourceComponent: Component {
+            TaskDetailPane {
+                theme: rightRail.theme
+            }
+        }
+    }
 }

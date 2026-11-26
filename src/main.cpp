@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "store/Database.h"
+#include "app/ItemModel.h"
 #include "app/TodayModel.h"
 
 int main(int argc, char *argv[])
@@ -27,9 +28,16 @@ int main(int argc, char *argv[])
     }
 
     TodayModel todayModel(database);
+    ItemModel itemModel(database);
+    QObject::connect(&itemModel, &ItemModel::taskMutated,
+                     &todayModel, &TodayModel::refresh);
+    QObject::connect(&todayModel, &TodayModel::taskUpdated,
+                     &itemModel, &ItemModel::syncTask);
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("todayModel"),
                                              &todayModel);
+    engine.rootContext()->setContextProperty(QStringLiteral("itemModel"),
+                                             &itemModel);
     const QUrl rootUrl(QStringLiteral("qrc:/qml/MainWindow.qml"));
     engine.load(rootUrl);
 

@@ -1,9 +1,26 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
+import "components"
 
 Item {
     id: page
     required property Theme theme
+    property var expandedTasks: ({})
+
+    function toggleTaskExpanded(taskId) {
+        const next = Object.assign({}, page.expandedTasks)
+        next[taskId] = !next[taskId]
+        page.expandedTasks = next
+    }
+
+    function expandTask(taskId) {
+        if (page.expandedTasks[taskId])
+            return
+        const next = Object.assign({}, page.expandedTasks)
+        next[taskId] = true
+        page.expandedTasks = next
+    }
 
     Column {
         id: heading
@@ -65,8 +82,8 @@ Item {
                 TextField {
                     id: taskTitle
                     width: Math.max(0, parent.width - addTaskButton.width - parent.spacing)
-                    placeholderText: qsTr("New task")
-                    Accessible.name: qsTr("New task")
+                    placeholderText: qsTr("Task title for this day")
+                    Accessible.name: qsTr("Task title for this day")
                     onAccepted: addTaskButton.clicked()
                 }
                 Button {
@@ -89,52 +106,99 @@ Item {
             }
             Component {
                 id: eventLine
-                Text {
+                Item {
+                    id: eventRow
+                    readonly property var eventData: parent.modelData
+                    readonly property bool allDay: Boolean(eventData && eventData.allDay)
+                    readonly property string startTime: eventData && eventData.startTime !== undefined ? eventData.startTime : ""
+                    readonly property string endTime: eventData && eventData.endTime !== undefined ? eventData.endTime : ""
+                    readonly property int priority: eventData && eventData.priority !== undefined ? eventData.priority : 0
+                    readonly property int durationMin: eventData && eventData.durationMin !== undefined ? eventData.durationMin : 0
+                    readonly property string folderName: eventData && eventData.folderName !== undefined ? eventData.folderName : ""
+                    readonly property var tags: eventData && eventData.tags !== undefined ? eventData.tags : []
+                    readonly property string timeRangeText: allDay
+                        ? qsTr("All day")
+                        : (startTime.length > 0 && endTime.length > 0
+                           ? qsTr("%1–%2").arg(startTime).arg(endTime)
+                           : startTime)
+
                     width: taskLines.width
-                    height: 40
-                    text: qsTr("Event: %1").arg(parent.modelData.title)
-                    color: page.theme.panelText
-                    font.family: page.theme.font
-                    font.pixelSize: page.theme.bodySize
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
+                    implicitHeight: Math.max(38, eventContent.implicitHeight + 8)
+                    height: implicitHeight
+
+                    RowLayout {
+                        id: eventContent
+                        anchors.fill: parent
+                        anchors.topMargin: 4
+                        anchors.bottomMargin: 4
+                        anchors.leftMargin: 6
+                        anchors.rightMargin: 4
+                        spacing: page.theme.gap * 0.75
+
+                        Rectangle {
+                            Layout.alignment: Qt.AlignTop
+                            Layout.topMargin: 8
+                            Layout.leftMargin: 5
+                            Layout.rightMargin: 5
+                            implicitWidth: 8
+                            implicitHeight: 8
+                            radius: 4
+                            color: eventRow.priority > 0
+                                ? page.theme.priorityColor(eventRow.priority)
+                                : page.theme.accent
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: eventRow.eventData ? eventRow.eventData.title : ""
+                                color: page.theme.panelText
+                                font.family: page.theme.font
+                                font.pixelSize: page.theme.bodySize
+                                elide: Text.ElideRight
+                            }
+
+                            ItemBadges {
+                                Layout.fillWidth: true
+                                theme: page.theme
+                                leadingText: eventRow.timeRangeText
+                                leadingNeutral: eventRow.allDay
+                                leadingAccessibleName: eventRow.allDay
+                                    ? qsTr("All-day event")
+                                    : (eventRow.timeRangeText.length > 0
+                                       ? qsTr("Event time: %1").arg(eventRow.timeRangeText)
+                                       : "")
+                                priority: eventRow.priority
+                                durationMin: eventRow.durationMin
+                                folderName: eventRow.folderName
+                                tags: eventRow.tags
+                            }
+                        }
+                    }
                 }
             }
             Component {
                 id: taskLine
-                CheckBox {
+                TaskRow {
                     width: taskLines.width
-                    text: parent.modelData.title
-                    checked: parent.modelData.completed
-                    font.family: page.theme.font
-                    font.pixelSize: page.theme.bodySize
-                    // The stored Item controls the check state, including when a
-                    // write fails; clicking must not break the checked binding.
-                    nextCheckState: function() { return checkState }
-                    onClicked: todayModel.setTaskCompleted(parent.modelData.id, !parent.modelData.completed)
-                    indicator: Rectangle {
-                        x: 0
-                        y: (parent.height - height) / 2
-                        width: 18
-                        height: 18
-                        radius: page.theme.radiusControl / 2
-                        color: parent.checked ? page.theme.accent : page.theme.panel
-                        border.color: parent.checked ? page.theme.accent : page.theme.muted
-                        Text {
-                            anchors.centerIn: parent
-                            text: parent.parent.checked ? "✓" : ""
-                            color: page.theme.panel
-                            font.family: page.theme.font
-                            font.pixelSize: page.theme.bodySize
-                        }
-                    }
-                    contentItem: Text {
-                        leftPadding: 26
-                        text: parent.text
-                        color: page.theme.panelText
-                        font: parent.font
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
+                    theme: page.theme
+                    taskData: parent.modelData
+                    selectedTaskId: itemModel.hasSelection ? itemModel.selectedId : ""
+                    expandedIds: page.expandedTasks
+                    onSelectRequested: (id) => itemModel.selectTask(id)
+                    onToggleCompletedRequested: (id, nextCompleted) => itemModel.setTaskCompleted(id, nextCompleted)
+                    onRenameRequested: (id, newTitle) => itemModel.renameTask(id, newTitle)
+                    onDeleteRequested: (id) => itemModel.deleteTask(id)
+                    onToggleExpandRequested: (id) => page.toggleTaskExpanded(id)
+                    onAddSubtaskRequested: (parentId, subtaskTitle, callback) => {
+                        const created = itemModel.addSubtask(parentId, subtaskTitle).length > 0
+                        if (created)
+                            page.expandTask(parentId)
+                        if (callback)
+                            callback(created)
                     }
                 }
             }
@@ -196,6 +260,15 @@ Item {
             width: parent.width
             visible: text.length > 0
             text: todayModel.taskError
+            color: page.theme.accent
+            font.family: page.theme.font
+            font.pixelSize: page.theme.bodySize
+            wrapMode: Text.Wrap
+        }
+        Text {
+            width: parent.width
+            visible: text.length > 0
+            text: itemModel.error
             color: page.theme.accent
             font.family: page.theme.font
             font.pixelSize: page.theme.bodySize
