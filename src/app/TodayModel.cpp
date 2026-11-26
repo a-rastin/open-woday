@@ -269,6 +269,7 @@ bool TodayModel::setTaskCompleted(const QString& id, bool completed)
     if (stored->completedAt.has_value() == completed) {
         setTaskError({});
         refreshLinesAndSummary();
+        emit taskUpdated(itemId);
         return true;
     }
     Item updated = *stored;
@@ -281,6 +282,7 @@ bool TodayModel::setTaskCompleted(const QString& id, bool completed)
     }
     setTaskError({});
     refreshLinesAndSummary();
+    emit taskUpdated(itemId);
     return true;
 }
 
@@ -423,6 +425,11 @@ void TodayModel::selectDate(const QString& date)
     refreshLinesAndSummary();
 }
 
+void TodayModel::refresh()
+{
+    refreshLinesAndSummary();
+}
+
 void TodayModel::refreshLinesAndSummary()
 {
     // The store is the single source of truth: normal reads exclude
@@ -440,6 +447,7 @@ void TodayModel::refreshLinesAndSummary()
             {QStringLiteral("kind"), kTaskKind},
             {QStringLiteral("title"), item.title},
             {QStringLiteral("completed"), item.completedAt.has_value()},
+            {QStringLiteral("priority"), item.priority},
         });
     }
     const QList<Item> eventItems = items.readEventsStartingOn(selectedDate());

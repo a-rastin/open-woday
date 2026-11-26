@@ -102,40 +102,18 @@ Item {
             }
             Component {
                 id: taskLine
-                CheckBox {
+                TaskRow {
                     width: taskLines.width
-                    text: parent.modelData.title
-                    checked: parent.modelData.completed
-                    font.family: page.theme.font
-                    font.pixelSize: page.theme.bodySize
-                    // The stored Item controls the check state, including when a
-                    // write fails; clicking must not break the checked binding.
-                    nextCheckState: function() { return checkState }
-                    onClicked: todayModel.setTaskCompleted(parent.modelData.id, !parent.modelData.completed)
-                    indicator: Rectangle {
-                        x: 0
-                        y: (parent.height - height) / 2
-                        width: 18
-                        height: 18
-                        radius: page.theme.radiusControl / 2
-                        color: parent.checked ? page.theme.accent : page.theme.panel
-                        border.color: parent.checked ? page.theme.accent : page.theme.muted
-                        Text {
-                            anchors.centerIn: parent
-                            text: parent.parent.checked ? "✓" : ""
-                            color: page.theme.panel
-                            font.family: page.theme.font
-                            font.pixelSize: page.theme.bodySize
-                        }
-                    }
-                    contentItem: Text {
-                        leftPadding: 26
-                        text: parent.text
-                        color: page.theme.panelText
-                        font: parent.font
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
-                    }
+                    theme: page.theme
+                    taskId: parent.modelData.id
+                    title: parent.modelData.title
+                    completed: parent.modelData.completed
+                    priority: parent.modelData.priority !== undefined ? parent.modelData.priority : 0
+                    selected: itemModel.hasSelection && itemModel.selectedId === parent.modelData.id
+                    onSelectRequested: (id) => itemModel.selectTask(id)
+                    onToggleCompletedRequested: (id, nextCompleted) => itemModel.setTaskCompleted(id, nextCompleted)
+                    onRenameRequested: (id, newTitle) => itemModel.renameTask(id, newTitle)
+                    onDeleteRequested: (id) => itemModel.deleteTask(id)
                 }
             }
         }
@@ -196,6 +174,15 @@ Item {
             width: parent.width
             visible: text.length > 0
             text: todayModel.taskError
+            color: page.theme.accent
+            font.family: page.theme.font
+            font.pixelSize: page.theme.bodySize
+            wrapMode: Text.Wrap
+        }
+        Text {
+            width: parent.width
+            visible: text.length > 0
+            text: itemModel.error
             color: page.theme.accent
             font.family: page.theme.font
             font.pixelSize: page.theme.bodySize

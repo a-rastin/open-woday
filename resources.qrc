@@ -8,6 +8,11 @@
         <file alias="RightRail.qml">src/qml/RightRail.qml</file>
         <file alias="Sidebar.qml">src/qml/Sidebar.qml</file>
         <file alias="TopBar.qml">src/qml/TopBar.qml</file>
+        <file alias="TaskRow.qml">src/qml/TaskRow.qml</file>
+        <file alias="TaskDetailPane.qml">src/qml/TaskDetailPane.qml</file>
+        <file alias="components/Checkbox.qml">src/qml/components/Checkbox.qml</file>
+        <file alias="components/Badge.qml">src/qml/components/Badge.qml</file>
+        <file alias="components/IconButton.qml">src/qml/components/IconButton.qml</file>
     </qresource>
     <qresource prefix="/store">
         <file alias="schema.sql">src/store/schema.sql</file>

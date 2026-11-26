@@ -37,6 +37,7 @@
 #include "store/Database.h"
 #include "store/BlockRepository.h"
 #include "store/ItemRepository.h"
+#include "app/ItemModel.h"
 #include "app/TodayModel.h"
 
 namespace {
@@ -3795,6 +3796,190 @@ int overlappingDatabasesKeepIndependentConnections()
     return 0;
 }
 
+int itemSelectionRenameCompletionAndSoftDeleteSurviveRestart()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    QString firstId;
+    QString secondId;
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        QObject::connect(&itemModel, &ItemModel::taskMutated,
+                         &todayModel, &TodayModel::refresh);
+        QObject::connect(&todayModel, &TodayModel::taskUpdated,
+                         &itemModel, &ItemModel::syncTask);
+
+        if (!check(!itemModel.hasSelection() && itemModel.selectedId().isEmpty()
+                       && itemModel.title().isEmpty() && !itemModel.completed()
+                       && itemModel.error().isEmpty(),
+                   QStringLiteral("ItemModel did not start in an idle empty state")))
+            return 1;
+
+        ItemRepository items(database);
+        Item event;
+        event.kind = QStringLiteral("event");
+        event.title = QStringLiteral("Standup");
+        event.startAt = todayModel.selectedDate() + QStringLiteral("T09:30:00");
+        const auto createdEvent = items.create(event);
+        if (!createdEvent)
+            return fail(items.lastError());
+
+        if (!todayModel.addTask(QStringLiteral("Draft release notes"))
+            || !todayModel.addTask(QStringLiteral("Check build output")))
+            return fail(QStringLiteral("could not seed Tasks for ItemModel test"));
+
+        todayModel.refresh();
+        const QVariantList initialLines = todayModel.lines();
+        if (!check(initialLines.size() == 3 && todayModel.taskCount() == 2
+                       && todayModel.eventCount() == 1,
+                   QStringLiteral("seeded Tasks and Event missing from Today")))
+            return 1;
+
+        firstId = initialLines.at(0).toMap().value(QStringLiteral("id")).toString();
+        secondId = initialLines.at(1).toMap().value(QStringLiteral("id")).toString();
+
+        if (!check(!itemModel.selectTask(QString::number(createdEvent->id))
+                       && !itemModel.error().isEmpty() && !itemModel.hasSelection(),
+                   QStringLiteral("selecting a non-Task Item was not rejected")))
+            return 1;
+
+        if (!check(itemModel.selectTask(firstId) && itemModel.hasSelection()
+                       && itemModel.selectedId() == firstId
+                       && itemModel.title() == QStringLiteral("Draft release notes")
+                       && !itemModel.completed() && itemModel.error().isEmpty(),
+                   QStringLiteral("selecting first Task did not populate ItemModel")))
+            return 1;
+
+        itemModel.clearSelection();
+        if (!check(!itemModel.hasSelection() && itemModel.selectedId().isEmpty()
+                       && itemModel.title().isEmpty(),
+                   QStringLiteral("clearSelection did not return ItemModel to idle")))
+            return 1;
+
+        if (!check(itemModel.selectTask(firstId),
+                   QStringLiteral("could not re-select first Task")))
+            return 1;
+
+        if (!check(!itemModel.renameTask(firstId, QStringLiteral("   "))
+                       && !itemModel.error().isEmpty()
+                       && itemModel.title() == QStringLiteral("Draft release notes"),
+                   QStringLiteral("blank inline rename was not rejected")))
+            return 1;
+
+        if (!check(itemModel.renameTask(firstId, QStringLiteral("  Publish release notes  "))
+                       && itemModel.error().isEmpty()
+                       && itemModel.title() == QStringLiteral("Publish release notes")
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("title")).toString()
+                           == QStringLiteral("Publish release notes"),
+                   QStringLiteral("renaming selected Task did not sync to Today immediately")))
+            return 1;
+
+        if (!check(itemModel.renameTask(secondId, QStringLiteral("Verify local build"))
+                       && itemModel.selectedId() == firstId
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("title")).toString()
+                           == QStringLiteral("Verify local build"),
+                   QStringLiteral("renaming non-selected Task did not sync to Today")))
+            return 1;
+
+        if (!check(itemModel.setTaskCompleted(firstId, true)
+                       && itemModel.completed()
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("completed")).toBool(),
+                   QStringLiteral("completing Task via ItemModel did not sync")))
+            return 1;
+
+        if (!check(itemModel.setTaskCompleted(firstId, false)
+                       && !itemModel.completed()
+                       && !todayModel.lines().at(0).toMap().value(QStringLiteral("completed")).toBool(),
+                   QStringLiteral("reopening Task via ItemModel did not sync")))
+            return 1;
+
+        if (!check(todayModel.setTaskCompleted(firstId, true) && itemModel.completed(),
+                   QStringLiteral("completing Task via TodayModel did not sync ItemModel")))
+            return 1;
+
+        if (!check(itemModel.setTaskCompleted(secondId, true)
+                       && todayModel.lines().at(1).toMap().value(QStringLiteral("completed")).toBool(),
+                   QStringLiteral("completing second Task via ItemModel did not sync")))
+            return 1;
+
+        // Simulated database write failure must preserve state and report an error.
+        QSqlQuery query(database.connection());
+        if (!query.exec(QStringLiteral(
+                "CREATE TRIGGER fail_task_mutation BEFORE UPDATE ON items "
+                "WHEN NEW.kind = 'task' BEGIN SELECT RAISE(FAIL, 'write blocked'); END")))
+            return fail(query.lastError().text());
+
+        if (!check(!itemModel.renameTask(firstId, QStringLiteral("Should fail"))
+                       && itemModel.error().contains(QStringLiteral("write blocked"))
+                       && itemModel.title() == QStringLiteral("Publish release notes")
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("title")).toString()
+                           == QStringLiteral("Publish release notes"),
+                   QStringLiteral("failed rename did not preserve Task state or report error")))
+            return 1;
+
+        if (!check(!itemModel.deleteTask(firstId)
+                       && itemModel.error().contains(QStringLiteral("write blocked"))
+                       && itemModel.hasSelection() && todayModel.taskCount() == 2,
+                   QStringLiteral("failed soft-delete cleared selection or removed Task")))
+            return 1;
+
+        if (!query.exec(QStringLiteral("DROP TRIGGER fail_task_mutation")))
+            return fail(query.lastError().text());
+
+        if (!check(itemModel.deleteTask(firstId) && itemModel.error().isEmpty()
+                       && !itemModel.hasSelection() && itemModel.selectedId().isEmpty()
+                       && todayModel.taskCount() == 1
+                       && todayModel.summary() == QStringLiteral("1 task and 1 event on this day")
+                       && todayModel.lines().size() == 2
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString()
+                           == secondId,
+                   QStringLiteral("soft-delete did not dismiss detail pane and update Today immediately")))
+            return 1;
+    }
+
+    {
+        Database database;
+        if (!database.open())
+            return fail(database.lastError());
+
+        TodayModel todayModel(database);
+        ItemModel itemModel(database);
+        ItemRepository items(database);
+
+        if (!check(todayModel.taskCount() == 1 && todayModel.eventCount() == 1
+                       && todayModel.lines().size() == 2
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString()
+                           == secondId
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("title")).toString()
+                           == QStringLiteral("Verify local build")
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("completed")).toBool(),
+                   QStringLiteral("surviving renamed/completed Task did not persist across restart")))
+            return 1;
+
+        if (!check(itemModel.selectTask(secondId)
+                       && itemModel.title() == QStringLiteral("Verify local build")
+                       && itemModel.completed(),
+                   QStringLiteral("reopened ItemModel did not load surviving Task after restart")))
+            return 1;
+
+        const auto deletedRow = items.readByIdIncludingSoftDeleted(firstId.toLongLong());
+        if (!check(!items.readById(firstId.toLongLong())
+                       && !itemModel.selectTask(firstId)
+                       && deletedRow && deletedRow->deletedAt.has_value(),
+                   QStringLiteral("soft-deleted Task did not remain excluded with deleted_at set after restart")))
+            return 1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -3980,6 +4165,9 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (overlappingDatabasesKeepIndependentConnections() != 0) {
+        return 1;
+    }
+    if (itemSelectionRenameCompletionAndSoftDeleteSurviveRestart() != 0) {
         return 1;
     }
 

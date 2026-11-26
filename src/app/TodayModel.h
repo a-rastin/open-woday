@@ -84,6 +84,9 @@ public:
     // so the view can only move within the contiguous range around today.
     Q_INVOKABLE void selectDate(const QString& date);
 
+public slots:
+    void refresh();
+
 signals:
     void selectedDateChanged();
     void summaryChanged();
@@ -93,6 +96,7 @@ signals:
     void taskErrorChanged();
     void refreshErrorChanged();
     void linesChanged();
+    void taskUpdated(qlonglong id);
 
 private slots:
     void updateToday();

@@ -11,7 +11,11 @@ QtObject {
     readonly property color panelText: "#161616"
     readonly property color muted: "#757575"
     readonly property color chip: "#F5F5F5"
+    readonly property color border: "#E4E4E7"
     readonly property color accent: "#E8503A"
+    readonly property color priorityLow: "#3B82F6"
+    readonly property color priorityMedium: "#D97706"
+    readonly property color priorityHigh: accent
 
     readonly property real radiusPanel: 18
     readonly property real radiusChip: 999
