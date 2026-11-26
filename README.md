@@ -167,15 +167,16 @@ The window has native OS decorations, a dark Sidebar and TopBar, and white
 rounded centre and right-rail panels. The Sidebar folds before the RightRail as
 the window narrows. On the current branch, select a date in the day strip to
 edit its plain-text Day note, view Task and Event lines with badge chips, create,
-rename, complete, schedule, prioritize, tag, file, nest, and soft-delete Tasks,
-and inspect or edit a selected Task and its plain-text Note in the right-rail
-detail pane. All changes persist locally in SQLite. The 5-type block editor,
-to-do→Task linking, Inbox rail, Quick Add parser, CSV export, and release
-packaging remain planned; the shortcut chip in the top bar is a label only. For
-`v0.1`, the supported distribution will be the AppImage above. Packaging uses
-`linuxdeployqt` to bundle Qt libraries into the AppImage and `dpkg-deb` to build
-the `.deb`. See [`dev-docs/tech-stack.md`](dev-docs/tech-stack.md) for the
-proposed source tree and build details.
+rename, complete/reopen, schedule, prioritize, tag, file, nest, and soft-delete
+Tasks, and inspect or edit a selected Task and its plain-text Note in the
+right-rail detail pane. All changes persist locally in SQLite. The 5-type block
+editor, to-do→Task linking, Inbox rail, Quick Add parser, CSV export, and
+release packaging remain planned; the shortcut chip in the top bar is a label
+only. For `v0.1`, the supported distribution will be the AppImage above.
+Packaging uses `linuxdeployqt` to bundle Qt libraries into the AppImage and
+`dpkg-deb` to build the `.deb`. See
+[`dev-docs/tech-stack.md`](dev-docs/tech-stack.md) for the proposed source tree
+and build details.
 
 ---
 

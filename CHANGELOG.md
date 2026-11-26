@@ -12,7 +12,7 @@ commits (the initial `v0.1` spec, ADRs, `GLOSSARY.md`, reference material and
 the constitution itself) predate this file; consult the git log for that
 design-only history.
 
-## [Unreleased] — 2026-11-25
+## [Unreleased] — 2026-11-26
 
 ### Added
 
@@ -90,7 +90,11 @@ design-only history.
   - `TodayPage`, `TaskRow`, `TaskDetailPane` and reusable components (`Checkbox`,
     `Badge`, `TagChip`, `IconButton`, `ItemBadges`) render Task and Event lines
     with metadata chips and host the Task detail pane in `RightRail`.
-  - The Phase 5 spec is at `dev-docs/specs/2026-11-26-10-task-crud/`.
+  - `tests/verify-persistence.cpp` covers the Phase 5 Task lifecycle, subtask
+    cascading soft-delete, DST-safe scheduling, Event metadata projection, and
+    restart survival.
+  - Phase 5 spec at `dev-docs/specs/2026-11-26-10-task-crud/` and review record
+    at `.code-review/2026-11-26-10-task-crud.md`.
 
 ### Changed
 
@@ -111,8 +115,16 @@ design-only history.
   branch, documents startup database creation and the static app-shell frame,
   and separates implemented local-data behaviour from planned shortcuts,
   Quick Add and CSV export.
+- `README.md` and `dev-docs/roadmap.md` were updated for the Phase 4 merge
+  (PR #10, marking Phases 2–4 `done`) and Phase 5 (`in-progress` on
+  `phase-5-task-crud`).
 - Phase 2 review cleanup extracts shared store helpers in `StoreHelpers.h` and
   deduplicates repository/database query and binding code.
+- Phase 5 helper extractions move shared debounced plain-text note persistence
+  into `NoteBuffer` (used by `TodayModel` and `ItemModel`), Task/Event badge
+  chip rendering into `ItemBadges.qml`, Task completion timestamps into
+  `ItemRepository::setCompleted`, and calendar day/time parsing into
+  `StoreHelpers.h`.
 
 ### Fixed
 
@@ -128,3 +140,19 @@ design-only history.
   be reused.
 - Phase 3 review fixes correct the Inter/system-font fallback and keep the shell
   and TopBar usable at narrow window widths.
+- Phase 4 follow-up fixes (merged in PR #10) query Tasks and Events by the
+  selected local calendar day (matching offset/local timestamps in
+  `StoreHelpers`), refresh `TodayModel` at local midnight and after clock
+  changes, keep the selected day reachable across midnight rollover, preserve
+  partial read results on query failures, separate Task errors from Day notes,
+  debounce Day note persistence, scroll Today tasks and the Day note together,
+  prevent formatted Day notes from blocking date navigation, and handle index
+  gaps in `BlockRepository::replaceText`.
+- Phase 5 review fixes ensure `ItemRepository::softDelete` cascades strictly
+  through Task subtasks without retiring linked Notes or Events, move
+  explicitly rescheduled subtasks out of their parent's old-day subtree onto the
+  target day as root lines, preserve naive wall-clock due/start times across
+  daylight-saving gaps in `StoreHelpers`, project Event metadata (`allDay`,
+  `startTime`, `endTime`, `priority`, `durationMin`, `folderName`, `tags`) for
+  Today badge chips, and commit inline Task title edits to the edited Task
+  rather than a newly selected Task.
