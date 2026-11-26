@@ -31,6 +31,7 @@
 #include <QtGlobal>
 
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <optional>
 #include <sqlite3.h>
@@ -6513,6 +6514,233 @@ int itemModelRetainsStateOnRelatedReadFailure()
     return 0;
 }
 
+int todayBatchTagRefreshAndReadForItems()
+{
+    QTemporaryDir dataDir;
+    if (freshAppData(&dataDir) != 0)
+        return 1;
+
+    Database database;
+    if (!database.open())
+        return fail(database.lastError());
+
+    ItemRepository items(database);
+    TagRepository tags(database);
+
+    const auto tagZ = tags.create(QStringLiteral("zeta"), QStringLiteral("#111111"));
+    const auto tagA = tags.create(QStringLiteral("alpha"), QStringLiteral("#222222"));
+    const auto tagB = tags.create(QStringLiteral("Beta"), QStringLiteral("#333333"));
+    if (!tagZ || !tagA || !tagB)
+        return fail(tags.lastError());
+
+    if (!check(tags.readForItems({}).isEmpty() && tags.lastError().isEmpty(),
+               QStringLiteral("readForItems({}) did not return empty without error")))
+        return 1;
+
+    const QString today = QDate::currentDate().toString(Qt::ISODate);
+    const QString tomorrow = QDate::currentDate().addDays(1).toString(Qt::ISODate);
+
+    Item root1;
+    root1.kind = QStringLiteral("task");
+    root1.title = QStringLiteral("Root Task 1");
+    root1.dueAt = today;
+    root1.sortOrder = 1;
+
+    Item root2;
+    root2.kind = QStringLiteral("task");
+    root2.title = QStringLiteral("Root Task 2");
+    root2.dueAt = today;
+    root2.sortOrder = 2;
+
+    Item otherDayTask;
+    otherDayTask.kind = QStringLiteral("task");
+    otherDayTask.title = QStringLiteral("Tomorrow Task");
+    otherDayTask.dueAt = tomorrow;
+
+    Item event1;
+    event1.kind = QStringLiteral("event");
+    event1.title = QStringLiteral("Event 1");
+    event1.startAt = today + QStringLiteral("T09:00:00");
+    event1.sortOrder = 1;
+
+    Item event2;
+    event2.kind = QStringLiteral("event");
+    event2.title = QStringLiteral("Event 2");
+    event2.startAt = today + QStringLiteral("T14:00:00");
+    event2.sortOrder = 2;
+
+    const auto createdRoot1 = items.create(root1);
+    const auto createdRoot2 = items.create(root2);
+    const auto createdOther = items.create(otherDayTask);
+    const auto createdEvent1 = items.create(event1);
+    const auto createdEvent2 = items.create(event2);
+    if (!createdRoot1 || !createdRoot2 || !createdOther || !createdEvent1 || !createdEvent2)
+        return fail(items.lastError());
+
+    Item child1;
+    child1.kind = QStringLiteral("task");
+    child1.title = QStringLiteral("Subtask 1");
+    child1.parentId = createdRoot1->id;
+    child1.dueAt = today;
+    const auto createdChild1 = items.create(child1);
+    if (!createdChild1)
+        return fail(items.lastError());
+
+    if (!tags.attachToItem(createdRoot1->id, tagZ->id)
+        || !tags.attachToItem(createdRoot1->id, tagA->id)
+        || !tags.attachToItem(createdChild1->id, tagB->id)
+        || !tags.attachToItem(createdEvent1->id, tagZ->id)
+        || !tags.attachToItem(createdEvent1->id, tagB->id)
+        || !tags.attachToItem(createdOther->id, tagA->id)) {
+        return fail(tags.lastError());
+    }
+
+    // Verify TagRepository::readForItems with duplicate IDs, untagged items, and ordering.
+    const QHash<qlonglong, QList<Tag>> bulkTags = tags.readForItems({
+        createdRoot1->id,
+        createdRoot1->id,
+        createdRoot2->id,
+        createdChild1->id,
+        createdEvent1->id,
+    });
+    if (!check(tags.lastError().isEmpty()
+                   && bulkTags.value(createdRoot1->id).size() == 2
+                   && bulkTags.value(createdRoot1->id).at(0).id == tagA->id
+                   && bulkTags.value(createdRoot1->id).at(1).id == tagZ->id
+                   && bulkTags.value(createdRoot2->id).isEmpty()
+                   && bulkTags.value(createdChild1->id).size() == 1
+                   && bulkTags.value(createdChild1->id).at(0).id == tagB->id
+                   && bulkTags.value(createdEvent1->id).size() == 2
+                   && bulkTags.value(createdEvent1->id).at(0).id == tagB->id
+                   && bulkTags.value(createdEvent1->id).at(1).id == tagZ->id
+                   && !bulkTags.contains(createdOther->id),
+               QStringLiteral("TagRepository::readForItems returned incorrect tags or order")))
+        return 1;
+
+    TodayModel todayModel(database);
+
+    QVariant handle = database.connection().driver()->handle();
+    if (!check(handle.isValid() && qstrcmp(handle.typeName(), "sqlite3*") == 0,
+               QStringLiteral("SQLite handle unavailable")))
+        return 1;
+    sqlite3* sqlite = *static_cast<sqlite3**>(handle.data());
+
+    // Count SQLITE_SELECT statements and item_tags table reads during TodayModel::refresh().
+    // SQLite authorizes both the outer SELECT and the multi-value IN (...) list as
+    // SQLITE_SELECT, so 3 item queries + 1 bulk tag query = 5 SQLITE_SELECTs total,
+    // remaining constant even as more displayed tasks and events are added.
+    struct QueryCounts {
+        int selects = 0;
+        int itemTagsReads = 0;
+    };
+    auto countQueries = [](void* data, int action, const char* arg1, const char*,
+                           const char*, const char*) -> int {
+        auto* counts = static_cast<QueryCounts*>(data);
+        if (action == SQLITE_SELECT)
+            ++counts->selects;
+        else if (action == SQLITE_READ && arg1 && std::strcmp(arg1, "item_tags") == 0)
+            ++counts->itemTagsReads;
+        return SQLITE_OK;
+    };
+    QueryCounts firstCounts;
+    sqlite3_set_authorizer(sqlite, countQueries, &firstCounts);
+    todayModel.refresh();
+    sqlite3_set_authorizer(sqlite, nullptr, nullptr);
+
+    if (!check(todayModel.refreshError().isEmpty() && firstCounts.selects == 5,
+               QStringLiteral("TodayModel::refresh ran %1 SELECTs instead of 5")
+                   .arg(firstCounts.selects)))
+        return 1;
+
+    const QVariantList lines = todayModel.lines();
+    if (!check(lines.size() == 4 && todayModel.taskCount() == 2 && todayModel.eventCount() == 2,
+               QStringLiteral("TodayModel line counts mismatch after refresh")))
+        return 1;
+
+    const QVariantMap r1Map = lines.at(0).toMap();
+    const QVariantList r1Tags = r1Map.value(QStringLiteral("tags")).toList();
+    const QVariantList r1Subs = r1Map.value(QStringLiteral("subtasks")).toList();
+    const QVariantList subTags = r1Subs.isEmpty()
+        ? QVariantList{}
+        : r1Subs.at(0).toMap().value(QStringLiteral("tags")).toList();
+    const QVariantList r2Tags = lines.at(1).toMap().value(QStringLiteral("tags")).toList();
+    const QVariantList e1Tags = lines.at(2).toMap().value(QStringLiteral("tags")).toList();
+    const QVariantList e2Tags = lines.at(3).toMap().value(QStringLiteral("tags")).toList();
+
+    if (!check(r1Tags.size() == 2
+                   && r1Tags.at(0).toMap().value(QStringLiteral("name")).toString() == QStringLiteral("alpha")
+                   && r1Tags.at(1).toMap().value(QStringLiteral("name")).toString() == QStringLiteral("zeta")
+                   && subTags.size() == 1
+                   && subTags.at(0).toMap().value(QStringLiteral("name")).toString() == QStringLiteral("Beta")
+                   && r2Tags.isEmpty()
+                   && e1Tags.size() == 2
+                   && e1Tags.at(0).toMap().value(QStringLiteral("name")).toString() == QStringLiteral("Beta")
+                   && e1Tags.at(1).toMap().value(QStringLiteral("name")).toString() == QStringLiteral("zeta")
+                   && e2Tags.isEmpty(),
+               QStringLiteral("TodayModel bulk tag hydration produced incorrect tag payloads")))
+        return 1;
+
+    // Add more tagged tasks and events and verify the query counts do not scale with item count.
+    Item extraTask;
+    extraTask.kind = QStringLiteral("task");
+    extraTask.title = QStringLiteral("Extra Task");
+    extraTask.dueAt = today;
+    extraTask.sortOrder = 3;
+    Item extraEvent;
+    extraEvent.kind = QStringLiteral("event");
+    extraEvent.title = QStringLiteral("Extra Event");
+    extraEvent.startAt = today + QStringLiteral("T16:00:00");
+    extraEvent.sortOrder = 3;
+    const auto createdExtraTask = items.create(extraTask);
+    const auto createdExtraEvent = items.create(extraEvent);
+    if (!createdExtraTask || !createdExtraEvent)
+        return fail(items.lastError());
+    if (!tags.attachToItem(createdExtraTask->id, tagA->id)
+        || !tags.attachToItem(createdExtraEvent->id, tagB->id))
+        return fail(tags.lastError());
+
+    QueryCounts secondCounts;
+    sqlite3_set_authorizer(sqlite, countQueries, &secondCounts);
+    todayModel.refresh();
+    sqlite3_set_authorizer(sqlite, nullptr, nullptr);
+
+    if (!check(todayModel.refreshError().isEmpty()
+                   && secondCounts.selects == firstCounts.selects
+                   && secondCounts.itemTagsReads == firstCounts.itemTagsReads
+                   && todayModel.taskCount() == 3
+                   && todayModel.eventCount() == 3,
+               QStringLiteral("TodayModel::refresh query count scaled with displayed item count")))
+        return 1;
+
+    const QVariantList refreshedLines = todayModel.lines();
+
+    // Verify failure on the bulk tag SELECT retains prior TodayModel state and sets refreshError.
+    struct FailNthSelect {
+        int current = 0;
+        int failOn = 4;
+    };
+    FailNthSelect failState{0, 4};
+    auto denyTagSelect = [](void* data, int action, const char*, const char*,
+                            const char*, const char*) -> int {
+        auto* state = static_cast<FailNthSelect*>(data);
+        if (action == SQLITE_SELECT && ++state->current == state->failOn)
+            return SQLITE_DENY;
+        return SQLITE_OK;
+    };
+    sqlite3_set_authorizer(sqlite, denyTagSelect, &failState);
+    todayModel.refresh();
+    sqlite3_set_authorizer(sqlite, nullptr, nullptr);
+
+    if (!check(!todayModel.refreshError().isEmpty()
+                   && todayModel.lines() == refreshedLines
+                   && todayModel.taskCount() == 3
+                   && todayModel.eventCount() == 3,
+               QStringLiteral("failed bulk tag read replaced TodayModel state or hid error")))
+        return 1;
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -6746,6 +6974,9 @@ int main(int argc, char* argv[])
         return 1;
     }
     if (itemModelRetainsStateOnRelatedReadFailure() != 0) {
+        return 1;
+    }
+    if (todayBatchTagRefreshAndReadForItems() != 0) {
         return 1;
     }
 

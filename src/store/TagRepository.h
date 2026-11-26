@@ -3,6 +3,7 @@
 
 #include "StoreHelpers.h"
 
+#include <QHash>
 #include <QList>
 #include <QString>
 #include <QtGlobal>
@@ -53,6 +54,10 @@ public:
 
     // Read all Tags attached to a given Item, ordered by name, then id.
     QList<Tag> readForItem(qlonglong itemId);
+
+    // Read all Tags attached to any of the given Items in bulk, keyed by
+    // item_id. Each Item's list is ordered by name, then id.
+    QHash<qlonglong, QList<Tag>> readForItems(const QList<qlonglong>& itemIds);
 
 private:
     std::optional<Tag> insertTag(const QString& trimmedName,

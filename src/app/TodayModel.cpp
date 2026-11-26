@@ -60,37 +60,26 @@ bool hasDueAncestor(const Item& item,
     return false;
 }
 
-bool readItemTagList(TagRepository& tagRepo,
-                     qlonglong itemId,
-                     QVariantList* outTags,
-                     QString* outError)
+void collectSubtreeItemIds(const Item& item,
+                           const QHash<qlonglong, QList<Item>>& childrenByParent,
+                           QSet<qlonglong>& seen,
+                           QList<qlonglong>& outIds)
 {
-    const QList<Tag> itemTags = tagRepo.readForItem(itemId);
-    if (!tagRepo.lastError().isEmpty()) {
-        *outError = tagRepo.lastError();
-        return false;
-    }
-    QVariantList tagList;
-    tagList.reserve(itemTags.size());
-    for (const Tag& tag : itemTags) {
-        tagList.append(QVariantMap{
-            {QStringLiteral("id"), QString::number(tag.id)},
-            {QStringLiteral("name"), tag.name},
-            {QStringLiteral("colour"), tag.colour.value_or(QString())},
-        });
-    }
-    *outTags = tagList;
-    return true;
+    if (seen.contains(item.id))
+        return;
+    seen.insert(item.id);
+    outIds.append(item.id);
+    const QList<Item> childItems = childrenByParent.value(item.id);
+    for (const Item& child : childItems)
+        collectSubtreeItemIds(child, childrenByParent, seen, outIds);
 }
 
-bool buildTaskLineMap(const Item& item,
-                      const QHash<qlonglong, QList<Item>>& childrenByParent,
-                      const QHash<qlonglong, QList<Item>>& allChildrenByParent,
-                      const QHash<qlonglong, QString>& folderNames,
-                      TagRepository& tagRepo,
-                      QSet<qlonglong>& visited,
-                      QVariantMap* outMap,
-                      QString* outError)
+QVariantMap buildTaskLineMap(const Item& item,
+                             const QHash<qlonglong, QList<Item>>& childrenByParent,
+                             const QHash<qlonglong, QList<Item>>& allChildrenByParent,
+                             const QHash<qlonglong, QString>& folderNames,
+                             const QHash<qlonglong, QVariantList>& tagsByItemId,
+                             QSet<qlonglong>& visited)
 {
     visited.insert(item.id);
 
@@ -98,9 +87,7 @@ bool buildTaskLineMap(const Item& item,
         ? store::extractLocalTimeHHmm(item.dueAt)
         : QString();
 
-    QVariantList tagList;
-    if (!readItemTagList(tagRepo, item.id, &tagList, outError))
-        return false;
+    const QVariantList tagList = tagsByItemId.value(item.id);
 
     const QString folderId = (item.folderId && *item.folderId > 0)
         ? QString::number(*item.folderId)
@@ -123,15 +110,11 @@ bool buildTaskLineMap(const Item& item,
     for (const Item& child : childItems) {
         if (visited.contains(child.id))
             continue;
-        QVariantMap childMap;
-        if (!buildTaskLineMap(child, childrenByParent, allChildrenByParent,
-                              folderNames, tagRepo, visited, &childMap, outError)) {
-            return false;
-        }
-        subtaskLines.append(childMap);
+        subtaskLines.append(buildTaskLineMap(child, childrenByParent, allChildrenByParent,
+                                             folderNames, tagsByItemId, visited));
     }
 
-    *outMap = QVariantMap{
+    return QVariantMap{
         {QStringLiteral("id"), QString::number(item.id)},
         {QStringLiteral("kind"), kTaskKind},
         {QStringLiteral("title"), item.title},
@@ -148,7 +131,6 @@ bool buildTaskLineMap(const Item& item,
         {QStringLiteral("subtaskTotal"), subtaskTotal},
         {QStringLiteral("subtasks"), subtaskLines},
     };
-    return true;
 }
 
 } // namespace
@@ -563,28 +545,51 @@ void TodayModel::refreshLinesAndSummary()
             folderNames.insert(folder.id, folder.name);
     }
 
-    TagRepository tagRepo(m_database);
+    QList<qlonglong> displayedItemIds;
+    QSet<qlonglong> seenItemIds;
+    displayedItemIds.reserve(rootTasks.size() + eventItems.size());
+    seenItemIds.reserve(rootTasks.size() + eventItems.size());
+    for (const Item& item : rootTasks)
+        collectSubtreeItemIds(item, childrenByParent, seenItemIds, displayedItemIds);
+    for (const Item& item : eventItems) {
+        if (!seenItemIds.contains(item.id)) {
+            seenItemIds.insert(item.id);
+            displayedItemIds.append(item.id);
+        }
+    }
+
+    QHash<qlonglong, QVariantList> tagsByItemId;
+    if (!displayedItemIds.isEmpty()) {
+        TagRepository tagRepo(m_database);
+        const QHash<qlonglong, QList<Tag>> tagsByItem = tagRepo.readForItems(displayedItemIds);
+        if (!tagRepo.lastError().isEmpty()) {
+            setRefreshError(tagRepo.lastError());
+            return;
+        }
+        tagsByItemId.reserve(tagsByItem.size());
+        for (auto it = tagsByItem.constBegin(); it != tagsByItem.constEnd(); ++it) {
+            QVariantList tagList;
+            tagList.reserve(it.value().size());
+            for (const Tag& tag : it.value()) {
+                tagList.append(QVariantMap{
+                    {QStringLiteral("id"), QString::number(tag.id)},
+                    {QStringLiteral("name"), tag.name},
+                    {QStringLiteral("colour"), tag.colour.value_or(QString())},
+                });
+            }
+            tagsByItemId.insert(it.key(), tagList);
+        }
+    }
+
     QVariantList lines;
     QSet<qlonglong> visited;
     for (const Item& item : rootTasks) {
         if (visited.contains(item.id))
             continue;
-        QVariantMap lineMap;
-        QString tagError;
-        if (!buildTaskLineMap(item, childrenByParent, allChildrenByParent,
-                              folderNames, tagRepo, visited, &lineMap, &tagError)) {
-            setRefreshError(tagError);
-            return;
-        }
-        lines.append(lineMap);
+        lines.append(buildTaskLineMap(item, childrenByParent, allChildrenByParent,
+                                      folderNames, tagsByItemId, visited));
     }
     for (const Item& item : eventItems) {
-        QVariantList tagList;
-        QString tagError;
-        if (!readItemTagList(tagRepo, item.id, &tagList, &tagError)) {
-            setRefreshError(tagError);
-            return;
-        }
         const QString folderId = (item.folderId && *item.folderId > 0)
             ? QString::number(*item.folderId)
             : QString();
@@ -604,7 +609,7 @@ void TodayModel::refreshLinesAndSummary()
             {QStringLiteral("durationMin"), item.durationMin.value_or(0)},
             {QStringLiteral("folderId"), folderId},
             {QStringLiteral("folderName"), folderName},
-            {QStringLiteral("tags"), tagList},
+            {QStringLiteral("tags"), tagsByItemId.value(item.id)},
         });
     }
 

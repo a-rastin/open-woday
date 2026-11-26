@@ -2,8 +2,10 @@
 
 #include "Database.h"
 
+#include <QSet>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QStringList>
 #include <QVariant>
 
 namespace {
@@ -11,14 +13,19 @@ namespace {
 using store::bindOptional;
 using store::readOptionalText;
 
-Tag tagFromQuery(const QSqlQuery& query)
+Tag tagFromQueryAt(const QSqlQuery& query, int offset)
 {
     Tag tag;
-    tag.id = query.value(0).toLongLong();
-    tag.name = query.value(1).toString();
-    tag.colour = readOptionalText(query, 2);
-    tag.icon = readOptionalText(query, 3);
+    tag.id = query.value(offset).toLongLong();
+    tag.name = query.value(offset + 1).toString();
+    tag.colour = readOptionalText(query, offset + 2);
+    tag.icon = readOptionalText(query, offset + 3);
     return tag;
+}
+
+Tag tagFromQuery(const QSqlQuery& query)
+{
+    return tagFromQueryAt(query, 0);
 }
 
 } // namespace
@@ -213,4 +220,61 @@ QList<Tag> TagRepository::readForItem(qlonglong itemId)
         QVariantList{ QVariant(itemId) },
         QStringLiteral("could not read Tags for Item"),
         tagFromQuery);
+}
+
+QHash<qlonglong, QList<Tag>> TagRepository::readForItems(const QList<qlonglong>& itemIds)
+{
+    m_error.clear();
+    if (itemIds.isEmpty()) {
+        return {};
+    }
+
+    QList<qlonglong> uniqueIds;
+    uniqueIds.reserve(itemIds.size());
+    QSet<qlonglong> seen;
+    seen.reserve(itemIds.size());
+    for (qlonglong id : itemIds) {
+        if (!seen.contains(id)) {
+            seen.insert(id);
+            uniqueIds.append(id);
+        }
+    }
+
+    // Keep bound parameters well below SQLite's default limit (999).
+    constexpr qsizetype kMaxBatchSize = 500;
+    QHash<qlonglong, QList<Tag>> tagsByItem;
+    for (qsizetype offset = 0; offset < uniqueIds.size(); offset += kMaxBatchSize) {
+        const qsizetype count = qMin(kMaxBatchSize, uniqueIds.size() - offset);
+        QStringList placeholders;
+        placeholders.reserve(count);
+        for (qsizetype i = 0; i < count; ++i) {
+            placeholders.append(QStringLiteral("?"));
+        }
+
+        const QString sql = QStringLiteral(
+            "SELECT item_tags.item_id, tags.id, tags.name, tags.colour, tags.icon "
+            "FROM tags "
+            "JOIN item_tags ON item_tags.tag_id = tags.id "
+            "WHERE item_tags.item_id IN (%1) "
+            "ORDER BY item_tags.item_id, tags.name COLLATE NOCASE, tags.id")
+            .arg(placeholders.join(QStringLiteral(", ")));
+
+        QSqlQuery query(m_database.connection());
+        query.prepare(sql);
+        for (qsizetype i = 0; i < count; ++i) {
+            query.addBindValue(uniqueIds.at(offset + i));
+        }
+        if (!query.exec()) {
+            fail(QStringLiteral("could not read Tags for Items: %1")
+                     .arg(query.lastError().text()));
+            return {};
+        }
+
+        while (query.next()) {
+            const qlonglong itemId = query.value(0).toLongLong();
+            tagsByItem[itemId].append(tagFromQueryAt(query, 1));
+        }
+    }
+
+    return tagsByItem;
 }
