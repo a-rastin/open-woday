@@ -85,6 +85,7 @@ bool readItemTagList(TagRepository& tagRepo,
 
 bool buildTaskLineMap(const Item& item,
                       const QHash<qlonglong, QList<Item>>& childrenByParent,
+                      const QHash<qlonglong, QList<Item>>& allChildrenByParent,
                       const QHash<qlonglong, QString>& folderNames,
                       TagRepository& tagRepo,
                       QSet<qlonglong>& visited,
@@ -108,19 +109,23 @@ bool buildTaskLineMap(const Item& item,
         ? folderNames.value(*item.folderId)
         : QString();
 
+    const QList<Item> allChildren = allChildrenByParent.value(item.id);
+    int subtaskDone = 0;
+    const int subtaskTotal = allChildren.size();
+    for (const Item& child : allChildren) {
+        if (child.completedAt.has_value())
+            ++subtaskDone;
+    }
+
     const QList<Item> childItems = childrenByParent.value(item.id);
     QVariantList subtaskLines;
     subtaskLines.reserve(childItems.size());
-    int subtaskDone = 0;
-    const int subtaskTotal = childItems.size();
     for (const Item& child : childItems) {
-        if (child.completedAt.has_value())
-            ++subtaskDone;
         if (visited.contains(child.id))
             continue;
         QVariantMap childMap;
-        if (!buildTaskLineMap(child, childrenByParent, folderNames, tagRepo,
-                              visited, &childMap, outError)) {
+        if (!buildTaskLineMap(child, childrenByParent, allChildrenByParent,
+                              folderNames, tagRepo, visited, &childMap, outError)) {
             return false;
         }
         subtaskLines.append(childMap);
@@ -521,13 +526,15 @@ void TodayModel::refreshLinesAndSummary()
 
     QHash<qlonglong, Item> taskById;
     QHash<qlonglong, QList<Item>> childrenByParent;
+    QHash<qlonglong, QList<Item>> allChildrenByParent;
     taskById.reserve(allTasks.size());
     bool needsFolders = false;
     for (const Item& task : allTasks) {
         taskById.insert(task.id, task);
-        if (task.parentId && *task.parentId > 0
-            && !isScheduledForOtherDay(task, dueIds)) {
-            childrenByParent[*task.parentId].append(task);
+        if (task.parentId && *task.parentId > 0) {
+            allChildrenByParent[*task.parentId].append(task);
+            if (!isScheduledForOtherDay(task, dueIds))
+                childrenByParent[*task.parentId].append(task);
         }
         if (task.folderId && *task.folderId > 0)
             needsFolders = true;
@@ -564,8 +571,8 @@ void TodayModel::refreshLinesAndSummary()
             continue;
         QVariantMap lineMap;
         QString tagError;
-        if (!buildTaskLineMap(item, childrenByParent, folderNames, tagRepo,
-                              visited, &lineMap, &tagError)) {
+        if (!buildTaskLineMap(item, childrenByParent, allChildrenByParent,
+                              folderNames, tagRepo, visited, &lineMap, &tagError)) {
             setRefreshError(tagError);
             return;
         }

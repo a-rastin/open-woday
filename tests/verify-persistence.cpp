@@ -6042,12 +6042,14 @@ int rescheduledSubtasksLeaveOldDayAndAppearOnTargetDay()
             return 1;
 
         // Rescheduling child to tomorrow removes it from Today's nested view
-        // and places it as a root Task on Tomorrow (with its undated grandchild).
+        // and places it as a root Task on Tomorrow (with its undated grandchild),
+        // while the parent row keeps counting all active Task children.
         if (!check(itemModel.setTaskDueDate(childId, tomorrow)
                        && todayModel.taskCount() == 1
-                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtaskTotal")).toInt() == 0
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtaskDone")).toInt() == 0
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtaskTotal")).toInt() == 1
                        && todayModel.lines().at(0).toMap().value(QStringLiteral("subtasks")).toList().isEmpty(),
-                   QStringLiteral("rescheduled subtask remained beneath parent on old day")))
+                   QStringLiteral("rescheduled subtask remained beneath parent on old day or lost count")))
             return 1;
 
         todayModel.selectDate(tomorrow);
@@ -6070,6 +6072,18 @@ int rescheduledSubtasksLeaveOldDayAndAppearOnTargetDay()
                        && todayModel.lines().at(1).toMap().value(QStringLiteral("id")).toString() == grandchildId,
                    QStringLiteral("grandchild due today was hidden when intermediate parent was on tomorrow")))
             return 1;
+
+        // Completing the rescheduled child updates TodayModel's parent subtaskDone
+        // count to match ItemModel even though the child is rendered on tomorrow.
+        if (!check(itemModel.setTaskCompleted(childId, true)
+                       && itemModel.selectTask(parentId)
+                       && itemModel.subtaskDone() == 1
+                       && itemModel.subtaskTotal() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtaskDone")).toInt() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtaskTotal")).toInt() == 1
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtasks")).toList().isEmpty(),
+                   QStringLiteral("TodayModel subtask counts disagreed with ItemModel for rescheduled child")))
+            return 1;
     }
 
     {
@@ -6078,14 +6092,19 @@ int rescheduledSubtasksLeaveOldDayAndAppearOnTargetDay()
             return fail(database.lastError());
 
         TodayModel todayModel(database);
+        ItemModel itemModel(database);
         if (!check(todayModel.taskCount() == 2
+                       && itemModel.selectTask(parentId)
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtaskDone")).toInt() == itemModel.subtaskDone()
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtaskTotal")).toInt() == itemModel.subtaskTotal()
                        && todayModel.lines().at(0).toMap().value(QStringLiteral("subtasks")).toList().isEmpty(),
-                   QStringLiteral("rescheduled subtask filtering did not survive restart")))
+                   QStringLiteral("rescheduled subtask filtering or counts did not survive restart")))
             return 1;
 
         todayModel.selectDate(tomorrow);
         if (!check(todayModel.taskCount() == 1
                        && todayModel.lines().at(0).toMap().value(QStringLiteral("id")).toString() == childId
+                       && todayModel.lines().at(0).toMap().value(QStringLiteral("subtaskTotal")).toInt() == 1
                        && todayModel.lines().at(0).toMap().value(QStringLiteral("subtasks")).toList().isEmpty(),
                    QStringLiteral("target day subtask view did not survive restart")))
             return 1;
