@@ -37,7 +37,7 @@ ColumnLayout {
     signal renameRequested(string taskId, string newTitle)
     signal deleteRequested(string taskId)
     signal toggleExpandRequested(string taskId)
-    signal addSubtaskRequested(string parentId, string title)
+    signal addSubtaskRequested(string parentId, string title, var callback)
 
     function beginRename() {
         editing = true
@@ -70,9 +70,13 @@ ColumnLayout {
         const trimmed = newSubtaskField.text.trim()
         if (trimmed.length === 0)
             return
-        root.addSubtaskRequested(root.taskId, trimmed)
-        newSubtaskField.text = ""
-        newSubtaskField.forceActiveFocus()
+        root.addSubtaskRequested(root.taskId, trimmed, (succeeded) => {
+            if (!newSubtaskField)
+                return
+            if (succeeded)
+                newSubtaskField.text = ""
+            newSubtaskField.forceActiveFocus()
+        })
     }
 
     function cancelAddSubtask() {
@@ -316,8 +320,8 @@ ColumnLayout {
                                 }
                                 function onDeleteRequested(id) { root.deleteRequested(id) }
                                 function onToggleExpandRequested(id) { root.toggleExpandRequested(id) }
-                                function onAddSubtaskRequested(parentId, subtaskTitle) {
-                                    root.addSubtaskRequested(parentId, subtaskTitle)
+                                function onAddSubtaskRequested(parentId, subtaskTitle, callback) {
+                                    root.addSubtaskRequested(parentId, subtaskTitle, callback)
                                 }
                             }
                         }

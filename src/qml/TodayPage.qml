@@ -193,9 +193,12 @@ Item {
                     onRenameRequested: (id, newTitle) => itemModel.renameTask(id, newTitle)
                     onDeleteRequested: (id) => itemModel.deleteTask(id)
                     onToggleExpandRequested: (id) => page.toggleTaskExpanded(id)
-                    onAddSubtaskRequested: (parentId, subtaskTitle) => {
-                        if (itemModel.addSubtask(parentId, subtaskTitle).length > 0)
+                    onAddSubtaskRequested: (parentId, subtaskTitle, callback) => {
+                        const created = itemModel.addSubtask(parentId, subtaskTitle).length > 0
+                        if (created)
                             page.expandTask(parentId)
+                        if (callback)
+                            callback(created)
                     }
                 }
             }
